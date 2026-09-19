@@ -1,0 +1,17 @@
+/.tools/
+/.learnings/
+/bin/
+/coverage.out
+/fabric-workspace-fs
+/fabric-workspace-fs.exe
+*.test
+*.test.exe
+*.prof
+*.log
+*evidence*.json
+.env
+.env.*
+!.env.example
+spool/
+recovery/
+.fabric-workspace-fs/

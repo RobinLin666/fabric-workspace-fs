@@ -1,0 +1,103 @@
+name: Go and offline FUSE
+
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  unit:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-24.04, windows-latest]
+        go: ["1.26.8", "1.27.1"]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: ${{ matrix.go }}
+          cache: true
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build ./cmd/...
+
+  linux-fuse:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.27.1"
+          cache: true
+      - name: Install Linux FUSE prerequisite on the CI runner
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq fuse3
+      - name: Race detector
+        run: go test -race ./...
+      - name: Real mounts with HTTP mocks and repeated close-save cycles
+        run: sh scripts/test-fuse.sh -race -count=10
+      - name: Cross-build platform boundaries
+        run: |
+          mkdir -p bin
+          GOOS=linux GOARCH=amd64 CGO_ENABLED=0 go build -o bin/fabric-workspace-fs ./cmd/fabric-workspace-fs
+          GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build -o bin/fabric-workspace-fs.exe ./cmd/fabric-workspace-fs
+
+  windows-winfsp:
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.27.1"
+          cache: true
+      - name: Install pinned WinFsp 2.1 runtime
+        shell: pwsh
+        run: |
+          $release = Invoke-RestMethod https://api.github.com/repos/winfsp/winfsp/releases/tags/v2.1
+          $asset = $release.assets | Where-Object { $_.name -match '^winfsp-.*\.msi$' } | Select-Object -First 1
+          if (-not $asset) { throw 'WinFsp 2.1 MSI asset was not found' }
+          Invoke-WebRequest $asset.browser_download_url -OutFile winfsp.msi
+          $process = Start-Process msiexec.exe -ArgumentList '/i', 'winfsp.msi', '/qn', 'INSTALLLEVEL=1000' -Wait -PassThru
+          if ($process.ExitCode -ne 0) { throw "WinFsp installation failed: $($process.ExitCode)" }
+      - name: Windows adapter and real WinFsp mount
+        shell: pwsh
+        env:
+          FABRICFS_WINFSP_TEST: "1"
+        run: go test -count=1 -v ./internal/fusefs
+      - run: go test ./...
+      - run: go vet ./...
+      - run: go build -o bin/fabric-workspace-fs-windows-amd64.exe ./cmd/fabric-workspace-fs
+
+  macos-macfuse-build:
+    runs-on: macos-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@fbc6f3992d24b796d5a048ff273f7fcc4a7b6c09 # v5
+        with:
+          persist-credentials: false
+      - uses: actions/setup-go@924ae3a1cded613372ab5595356fb5720e22ba16 # v6
+        with:
+          go-version: "1.27.1"
+          cache: true
+      - name: Install macFUSE compile/runtime dependency
+        run: brew install macfuse
+      - name: Compile and test the macFUSE adapter without mounting
+        env:
+          CGO_ENABLED: "1"
+        run: |
+          go test ./...
+          go vet ./...
+          mkdir -p bin
+          go build -o bin/fabric-workspace-fs-darwin ./cmd/fabric-workspace-fs
