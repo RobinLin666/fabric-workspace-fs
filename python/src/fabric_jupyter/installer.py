@@ -15,6 +15,11 @@ def kernel_name(profile: Profile) -> str:
     return f"fabric-{profile.language.value}"
 
 
+def kernel_display_name(profile: Profile) -> str:
+    language = "PySpark" if profile.language.value == "pyspark" else "Python"
+    return f"fabric-jupyter ({language})"
+
+
 def install_kernels(*, replace: bool = False) -> list[str]:
     """Install built-in Fabric Python and PySpark user kernelspecs."""
 
@@ -41,7 +46,7 @@ def install_kernels(*, replace: bool = False) -> list[str]:
                 "--profile",
                 profile.name,
             ],
-            "display_name": f"Fabric {profile.language.value.title()} (local broker)",
+            "display_name": kernel_display_name(profile),
             "language": "python",
             "metadata": {
                 "debugger": False,

@@ -1,4 +1,4 @@
-# Fabric Jupyter kernel and local broker
+# `fabric-jupyter`
 
 `fabric-jupyter` is an optional Python package under [`python/`](../python).
 It complements `fabric-workspace-fs`: the mount can provide optional notebook
@@ -23,9 +23,15 @@ Start the broker in a terminal owned by the same local user:
 fabric-jupyter broker
 ```
 
-Then select **Fabric Pyspark (local broker)** or **Fabric Python (local
-broker)** from a Jupyter client. The broker runs in the foreground; stopping
-it stops local kernel-to-broker requests.
+Then select **fabric-jupyter (PySpark)** or **fabric-jupyter (Python)** from a
+Jupyter client. The broker runs in the foreground; stopping it stops local
+kernel-to-broker requests.
+
+The distribution and command are both named `fabric-jupyter`. The importable
+Python module remains `fabric_jupyter` because Python package names cannot use
+hyphens. Existing kernelspec identifiers (`fabric-pyspark` and
+`fabric-python`) are retained for compatibility; reinstalling updates their
+visible display names without breaking saved Jupyter kernel references.
 
 ## Profiles and target resolution
 

@@ -17,7 +17,7 @@ from .models import redact_mapping
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="fabric-jupyter", description="Local Fabric Jupyter kernel and broker"
+        prog="fabric-jupyter", description="Local fabric-jupyter kernel and broker"
     )
     subcommands = parser.add_subparsers(dest="command", required=True)
     install = subcommands.add_parser("install-kernels", help="install user-scoped kernelspecs")

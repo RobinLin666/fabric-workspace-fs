@@ -27,6 +27,7 @@ def test_user_kernelspec_install(local_state: Path, monkeypatch) -> None:
     kernels = local_state / "jupyter" / "kernels"
     spec = json.loads((kernels / "fabric-pyspark" / "kernel.json").read_text())
     assert spec["argv"][2:4] == ["fabric_jupyter", "kernel"]
+    assert spec["display_name"] == "fabric-jupyter (PySpark)"
     assert spec["metadata"]["fabric_jupyter"]["capabilities"]["widgets"] is False
 
 

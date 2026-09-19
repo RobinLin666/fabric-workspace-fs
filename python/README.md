@@ -1,4 +1,4 @@
-# fabric-jupyter
+# `fabric-jupyter`
 
 `fabric-jupyter` is the optional Python companion to the Go
 `fabric-workspace-fs` mount. It installs local Jupyter kernels and uses a

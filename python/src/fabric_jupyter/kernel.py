@@ -26,14 +26,14 @@ class FabricKernel(IPythonKernel):
         "file_extension": ".py",
         "pygments_lexer": "python",
     }
-    banner = "Fabric Jupyter local broker kernel"
+    banner = "fabric-jupyter local broker kernel"
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
         name = os.environ.get("FABRIC_JUPYTER_PROFILE", "fabric-pyspark")
         profile = load_profiles().get(name)
         if profile is None:
-            raise RuntimeError(f"unknown Fabric Jupyter profile: {name}")
+            raise RuntimeError(f"unknown fabric-jupyter profile: {name}")
         self._profile = profile
         self._target = resolve_target(profile)
         self._client = BrokerClient(load_endpoint())
