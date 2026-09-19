@@ -627,24 +627,6 @@ func (f *portableFS) Mkdir(name string, _ uint32) int {
 	return 0
 }
 
-func (f *portableFS) Chmod(name string, _ uint32) int {
-	return f.updateMetadata(name)
-}
-
-func (f *portableFS) Chown(name string, _ uint32, _ uint32) int {
-	return f.updateMetadata(name)
-}
-
-func (f *portableFS) updateMetadata(name string) int {
-	f.tree.RLock()
-	defer f.tree.RUnlock()
-	entry, err := f.resolve(f.ctx, name)
-	if err == nil && !f.backend.Writable(entry) {
-		err = fserrors.ErrReadOnly
-	}
-	return f.fail("update metadata", err)
-}
-
 func (f *portableFS) remove(name string, directory bool) int {
 	f.tree.Lock()
 	entry, err := f.resolve(f.ctx, name)
@@ -723,9 +705,9 @@ func portableWriting(flags int) bool {
 	return flags&fuse.O_WRONLY != 0 || flags&fuse.O_RDWR != 0
 }
 
-func (f *portableFS) Chmod(name string, _ uint32) int { return f.unsupportedMutation(name) }
+func (f *portableFS) Chmod(name string, _ uint32) int { return f.updateMetadata(name) }
 func (f *portableFS) Chown(name string, _, _ uint32) int {
-	return f.unsupportedMutation(name)
+	return f.updateMetadata(name)
 }
 func (f *portableFS) Utimens(name string, _ []fuse.Timespec) int {
 	return f.unsupportedMutation(name)
@@ -734,6 +716,19 @@ func (f *portableFS) Setxattr(name, _ string, _ []byte, _ int) int {
 	return f.unsupportedMutation(name)
 }
 func (f *portableFS) Removexattr(name, _ string) int { return f.unsupportedMutation(name) }
+
+func (f *portableFS) updateMetadata(name string) int {
+	f.tree.RLock()
+	defer f.tree.RUnlock()
+	entry, err := f.resolve(f.ctx, name)
+	if err != nil {
+		return f.fail("metadata update lookup", err)
+	}
+	if !f.backend.Writable(entry) {
+		return -fuse.EROFS
+	}
+	return 0
+}
 
 func (f *portableFS) unsupportedMutation(name string) int {
 	f.tree.RLock()
