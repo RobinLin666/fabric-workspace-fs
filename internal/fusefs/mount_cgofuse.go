@@ -52,9 +52,9 @@ func Mount(mountpoint string, backend *workspacefs.FS, opts Options) (Server, er
 	}
 	mountOptions := []string{"-o", "fsname=fabric-workspace-fs", "-o", "attr_timeout=0,entry_timeout=0,negative_timeout=0"}
 	if runtime.GOOS == "windows" {
-		// WinFsp maps POSIX ownership to Windows security. uid=-1 selects the
-		// mounting Windows user instead of treating uid 0 as a foreign owner.
-		mountOptions = append(mountOptions, "-o", "uid=-1,FileInfoTimeout=0")
+		// WinFsp maps POSIX ownership to Windows security. Mapping both owner
+		// and group to the mounting user keeps writable directories accessible.
+		mountOptions = append(mountOptions, "-o", "uid=-1,gid=-1,FileInfoTimeout=0")
 	}
 	if opts.ReadOnly {
 		mountOptions = append(mountOptions, "-o", "ro")

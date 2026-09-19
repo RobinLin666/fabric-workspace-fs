@@ -263,7 +263,7 @@ func TestWinFspIntegration(t *testing.T) {
 	}
 	defer backend.Close()
 	mountpoint := availableWindowsDrive(t)
-	server, err := Mount(mountpoint, backend, Options{Logger: log.New(os.Stderr, "WinFsp: ", 0)})
+	server, err := Mount(mountpoint, backend, Options{Logger: log.New(io.Discard, "", 0)})
 	if err != nil {
 		t.Fatalf("WinFsp mount: %v", err)
 	}
