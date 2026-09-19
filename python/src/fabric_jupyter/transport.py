@@ -1,0 +1,92 @@
+"""Transport boundary. Only the deterministic fake transport executes by default."""
+
+from __future__ import annotations
+
+import asyncio
+from abc import ABC, abstractmethod
+from collections.abc import AsyncIterator
+
+from .models import EventKind, ExecutionEvent, ExecutionRequest, FabricTarget, TransportKind
+
+
+class FabricTransport(ABC):
+    """A target-bound remote execution transport."""
+
+    @abstractmethod
+    def execute(self, request: ExecutionRequest) -> AsyncIterator[ExecutionEvent]:
+        """Submit code and yield normalized events."""
+
+    @abstractmethod
+    async def interrupt(self, target: FabricTarget) -> None:
+        """Interrupt target execution."""
+
+    @abstractmethod
+    async def shutdown(self, target: FabricTarget) -> None:
+        """Release target session resources."""
+
+
+class FakeFabricTransport(FabricTransport):
+    """Deterministic test transport; it never evaluates user Python code."""
+
+    def __init__(self) -> None:
+        self.executions: list[ExecutionRequest] = []
+        self.interrupted: list[FabricTarget] = []
+        self.shutdown_targets: list[FabricTarget] = []
+
+    async def execute(self, request: ExecutionRequest) -> AsyncIterator[ExecutionEvent]:
+        self.executions.append(request)
+        yield ExecutionEvent(
+            EventKind.STREAM, {"name": "stdout", "text": "[fake Fabric] request accepted\n"}
+        )
+        await asyncio.sleep(0)
+        if request.code.strip().startswith("raise"):
+            yield ExecutionEvent(
+                EventKind.ERROR,
+                {
+                    "ename": "FakeFabricError",
+                    "evalue": "fake transport requested an error",
+                    "traceback": ["FakeFabricError: fake transport requested an error"],
+                },
+            )
+            return
+        if not request.silent:
+            yield ExecutionEvent(
+                EventKind.RESULT,
+                {
+                    "data": {"text/plain": "Fake Fabric execution completed"},
+                    "metadata": {},
+                    "execution_count": 1,
+                },
+            )
+
+    async def interrupt(self, target: FabricTarget) -> None:
+        self.interrupted.append(target)
+
+    async def shutdown(self, target: FabricTarget) -> None:
+        self.shutdown_targets.append(target)
+
+
+class ExperimentalFabricTransport(FabricTransport):
+    """An intentionally inert placeholder for a separately reviewed real transport."""
+
+    async def execute(self, request: ExecutionRequest) -> AsyncIterator[ExecutionEvent]:
+        del request
+        raise RuntimeError(
+            "the experimental Fabric transport is not configured in this release; "
+            "no undocumented endpoint or credential flow will be attempted"
+        )
+        yield  # pragma: no cover
+
+    async def interrupt(self, target: FabricTarget) -> None:
+        del target
+        raise RuntimeError("the experimental Fabric transport is not configured")
+
+    async def shutdown(self, target: FabricTarget) -> None:
+        del target
+        raise RuntimeError("the experimental Fabric transport is not configured")
+
+
+def make_transport(kind: TransportKind) -> FabricTransport:
+    if kind is TransportKind.FAKE:
+        return FakeFabricTransport()
+    return ExperimentalFabricTransport()

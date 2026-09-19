@@ -28,6 +28,30 @@ services, including real Linux FUSE mounts. A separate, explicitly authorized
 live smoke command creates only uniquely named test fixtures. Validate in a
 disposable workspace before relying on it for remote data.
 
+## Optional Jupyter kernel and local broker
+
+The repository also ships an optional standalone Python 3.11+ package at
+[`python/`](python) named `fabric-jupyter`. It installs user-scoped Fabric
+Python/PySpark kernels and connects them to an owner-local authenticated broker.
+It complements the FUSE mount: a mounted Notebook's `.fabric.json` can supply
+optional target identity, but it is never assumed and no credentials are read
+from a mount.
+
+The default transport is deterministic and fake: it does not execute code or
+contact Fabric. The experimental transport is intentionally inert until a
+separately reviewed, explicitly configured real execution transport exists.
+There is no hardcoded tenant, endpoint, token flow, background service, or
+remote execution by default.
+
+```sh
+python -m pip install ./python
+fabric-jupyter install-kernels
+fabric-jupyter broker
+```
+
+See [`docs/JUPYTER.md`](docs/JUPYTER.md) for architecture, profile resolution,
+IPC security, compatible Jupyter messages, limitations, and offline testing.
+
 ## Build and prerequisites
 
 Use Go **1.26 or later**. Install the native filesystem runtime separately:
