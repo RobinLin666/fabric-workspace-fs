@@ -287,6 +287,11 @@ func TestWinFspIntegration(t *testing.T) {
 	}
 	_, _, files, _, _ := portablePaths(t)
 	directory := filepath.Join(mountpoint+`\`, filepath.FromSlash(strings.TrimPrefix(files, "/")), "e2e")
+	if info, err := os.Stat(filepath.Dir(directory)); err != nil {
+		t.Fatalf("WinFsp Lakehouse Files stat: %v", err)
+	} else {
+		t.Logf("WinFsp Lakehouse Files mode: %v", info.Mode())
+	}
 	if err := os.Mkdir(directory, 0755); err != nil {
 		t.Fatalf("WinFsp Lakehouse mkdir: %v", err)
 	}
