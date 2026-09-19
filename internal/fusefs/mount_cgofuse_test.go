@@ -287,15 +287,7 @@ func TestWinFspIntegration(t *testing.T) {
 	}
 	_, _, files, _, _ := portablePaths(t)
 	directory := filepath.Join(mountpoint+`\`, filepath.FromSlash(strings.TrimPrefix(files, "/")), "e2e")
-	if info, err := os.Stat(filepath.Dir(directory)); err != nil {
-		t.Fatalf("WinFsp Lakehouse Files stat: %v", err)
-	} else {
-		t.Logf("WinFsp Lakehouse Files mode: %v", info.Mode())
-	}
 	if err := os.Mkdir(directory, 0755); err != nil {
-		if _, statErr := os.Stat(directory); statErr == nil {
-			t.Fatalf("WinFsp Lakehouse mkdir created %q but reported: %v", directory, err)
-		}
 		t.Fatalf("WinFsp Lakehouse mkdir: %v", err)
 	}
 	source, target := filepath.Join(directory, "payload.txt"), filepath.Join(directory, "renamed.txt")

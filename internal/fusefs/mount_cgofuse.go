@@ -627,6 +627,24 @@ func (f *portableFS) Mkdir(name string, _ uint32) int {
 	return 0
 }
 
+func (f *portableFS) Chmod(name string, _ uint32) int {
+	return f.updateMetadata(name)
+}
+
+func (f *portableFS) Chown(name string, _ uint32, _ uint32) int {
+	return f.updateMetadata(name)
+}
+
+func (f *portableFS) updateMetadata(name string) int {
+	f.tree.RLock()
+	defer f.tree.RUnlock()
+	entry, err := f.resolve(f.ctx, name)
+	if err == nil && !f.backend.Writable(entry) {
+		err = fserrors.ErrReadOnly
+	}
+	return f.fail("update metadata", err)
+}
+
 func (f *portableFS) remove(name string, directory bool) int {
 	f.tree.Lock()
 	entry, err := f.resolve(f.ctx, name)
