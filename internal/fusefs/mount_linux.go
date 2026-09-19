@@ -549,14 +549,16 @@ func (h *fileHandle) Flush(ctx context.Context) syscall.Errno {
 	if code := h.change.check(); code != 0 {
 		return code
 	}
-	return h.node.adapter.failure("flush", h.handle.Flush(ctx))
+	// The kernel can interrupt FLUSH after it has accepted prior writes.
+	// Persisting the spool remains necessary for close to be durable.
+	return h.node.adapter.failure("flush", h.handle.Flush(context.WithoutCancel(ctx)))
 }
 func (h *fileHandle) Fsync(ctx context.Context, _ uint32) syscall.Errno {
 	defer h.change.changed(false)
 	if code := h.change.check(); code != 0 {
 		return code
 	}
-	return h.node.adapter.failure("fsync", h.handle.Flush(ctx))
+	return h.node.adapter.failure("fsync", h.handle.Flush(context.WithoutCancel(ctx)))
 }
 func (h *fileHandle) Release(context.Context) syscall.Errno {
 	defer h.change.changed(true)
