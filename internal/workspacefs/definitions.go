@@ -3,7 +3,6 @@ package workspacefs
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"encoding/base64"
 	"encoding/json"
 	"errors"
@@ -11,6 +10,7 @@ import (
 	"io"
 	"io/fs"
 	"strings"
+	"time"
 
 	"fabric-workspace-fs/internal/fabric"
 	"fabric-workspace-fs/internal/fserrors"
@@ -142,14 +142,6 @@ func (s *FS) statDefinition(ctx context.Context, e Entry) (Entry, error) {
 	return e, nil
 }
 
-func digest(def fabric.Definition) ([32]byte, error) {
-	data, err := json.Marshal(def)
-	if err != nil {
-		return [32]byte{}, err
-	}
-	return sha256.Sum256(data), nil
-}
-
 func validNotebook(data []byte) error {
 	var notebook struct {
 		Format int             `json:"nbformat"`
@@ -177,8 +169,16 @@ func validNotebook(data []byte) error {
 func (s *FS) notebookCommit(e Entry, snapshot *definitionSnapshot, partPath string) func(context.Context, io.ReaderAt, int64) error {
 	base := snapshot.definition
 	before, baseErr := s.snapshotDigest(snapshot)
-	return func(ctx context.Context, reader io.ReaderAt, size int64) error {
-		defer s.invalidateDefinition(e)
+	return func(ctx context.Context, reader io.ReaderAt, size int64) (resultErr error) {
+		finish := s.startNotebookCommit(e)
+		defer func() { finish(resultErr == nil) }()
+		start := time.Now()
+		prepared := false
+		defer func() {
+			if !prepared {
+				s.observeNotebook("save_prepare", time.Since(start), resultErr)
+			}
+		}()
 		if baseErr != nil {
 			return baseErr
 		}
@@ -208,15 +208,22 @@ func (s *FS) notebookCommit(e Entry, snapshot *definitionSnapshot, partPath stri
 		if !found {
 			return fmt.Errorf("notebook content part disappeared: %w", fserrors.ErrConflict)
 		}
+		s.observeNotebook("save_prepare", time.Since(start), nil)
+		prepared = true
+		start = time.Now()
 		current, err := s.fetchDefinition(ctx, e)
+		s.observeNotebook("save_preflight", time.Since(start), err)
 		if err != nil {
 			return err
 		}
+		start = time.Now()
 		actual, err := digest(current)
 		if err != nil {
+			s.observeNotebook("digest", time.Since(start), err)
 			return err
 		}
 		after, err := digest(desired)
+		s.observeNotebook("digest", time.Since(start), err)
 		if err != nil {
 			return err
 		}
@@ -231,7 +238,10 @@ func (s *FS) notebookCommit(e Entry, snapshot *definitionSnapshot, partPath stri
 		}
 		// Fabric has no documented conditional updateDefinition. This detects
 		// prior edits, but the read/update race is explicitly not an atomic CAS.
-		if err := s.fabric.UpdateNotebook(ctx, e.Workspace, e.Item.ID, desired); err != nil {
+		start = time.Now()
+		err = s.fabric.UpdateNotebook(ctx, e.Workspace, e.Item.ID, desired)
+		s.observeNotebook("save_update", time.Since(start), err)
+		if err != nil {
 			return err
 		}
 		// This is only the open writer's comparison base, never a published

@@ -6,8 +6,10 @@ import (
 	"io/fs"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
+	"fabric-workspace-fs/internal/cache"
 	"fabric-workspace-fs/internal/fabric"
 	"fabric-workspace-fs/internal/fserrors"
 	"fabric-workspace-fs/internal/namespace"
@@ -24,6 +26,7 @@ type definitionSnapshot struct {
 	version    [32]byte
 	versionErr error
 	versionOne sync.Once
+	prewarmed  atomic.Bool
 }
 
 func snapshotKey(e Entry) string {
@@ -44,27 +47,50 @@ func (s *FS) sourceSnapshot(ctx context.Context, e Entry, maxAge time.Duration, 
 		s.snapshots.Invalidate(key)
 		maxAge = 0
 	}
-	return s.snapshots.GetWithin(ctx, key, min(maxAge, policy.Definition), policy.Definition, func(ctx context.Context) (*definitionSnapshot, error) {
+	snapshot, err := s.snapshots.GetWithin(ctx, key, min(maxAge, policy.Definition), policy.Definition, func(ctx context.Context) (*definitionSnapshot, error) {
 		def, err := s.fetchDefinition(ctx, e)
 		if err != nil {
 			return nil, err
 		}
-		return s.makeSnapshot(def, e.Item.Type, s.now())
+		start := time.Now()
+		value, err := s.makeSnapshot(def, e.Item.Type, s.now())
+		if e.Item.Type == "Notebook" {
+			s.observeNotebook("decode_validate", time.Since(start), err)
+		}
+		if value != nil && ctx.Value(prewarmSlotKey{}) == true {
+			value.prewarmed.Store(true)
+		}
+		return value, err
 	})
+	if err == nil && ctx.Value(prewarmSlotKey{}) != true && s.prewarm != nil && snapshot.prewarmed.Swap(false) {
+		s.prewarm.mu.Lock()
+		s.prewarm.stats.Used++
+		s.prewarm.mu.Unlock()
+	}
+	return snapshot, err
 }
 
 // fetchDefinition obtains one source generation without decoding its parts. Save
 // conflict detection hashes the full wire definition, so decoding the current
 // notebook body would add CPU and allocations without affecting that comparison.
-func (s *FS) fetchDefinition(ctx context.Context, e Entry) (fabric.Definition, error) {
+func (s *FS) fetchDefinition(ctx context.Context, e Entry) (result fabric.Definition, resultErr error) {
 	if e.Item.Type != "Notebook" && e.Item.Type != "Environment" {
 		return fabric.Definition{}, fs.ErrInvalid
 	}
-	select {
-	case s.snapshotSlots <- struct{}{}:
-		defer func() { <-s.snapshotSlots }()
-	case <-ctx.Done():
-		return fabric.Definition{}, ctx.Err()
+	if ctx.Value(prewarmSlotKey{}) != true {
+		start := time.Now()
+		release, err := s.definitionGate.acquire(ctx)
+		if e.Item.Type == "Notebook" {
+			s.observeNotebook("definition_wait", time.Since(start), err)
+		}
+		if err != nil {
+			return fabric.Definition{}, err
+		}
+		defer release()
+	}
+	start := time.Now()
+	if e.Item.Type == "Notebook" {
+		defer func() { s.observeNotebook("definition_export", time.Since(start), resultErr) }()
 	}
 	format := ""
 	if e.Item.Type == "Notebook" {
@@ -154,8 +180,10 @@ func hiddenPlatform(path string) bool {
 
 func (s *FS) snapshotDigest(snapshot *definitionSnapshot) ([32]byte, error) {
 	snapshot.versionOne.Do(func() {
+		start := time.Now()
 		s.digests.Add(1)
 		snapshot.version, snapshot.versionErr = digest(snapshot.definition)
+		s.observeNotebook("digest", time.Since(start), snapshot.versionErr)
 	})
 	return snapshot.version, snapshot.versionErr
 }
@@ -204,6 +232,10 @@ type SnapshotStats struct {
 	RetainedBytes, PinnedBytes int64
 	PinnedHandles              int
 }
+
+// DefinitionCacheStats includes shared-flight and hit/miss counts for the one
+// Notebook/Environment snapshot cache, without changing SnapshotStats.Loads.
+func (s *FS) DefinitionCacheStats() cache.Stats { return s.snapshots.Stats() }
 
 // SnapshotStats counts raw payloads, decoded bodies, and conservative per-handle
 // reservations even when several handles share a single immutable allocation.

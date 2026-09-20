@@ -585,7 +585,10 @@ Only one writable handle per remote file is permitted in a mount; other paths
 can have independent writers. The writer immediately reads its own spool bytes.
 Separate read handles are snapshots of remote content, not a shared coherent
 view of another handle's unflushed data. Path/fd attributes expose active dirty
-size. Read handles validate ETags instead of mixing changed remote ranges.
+size without waiting for that writer's remote flush. Actual writes, truncates,
+reads through the writer, flushes and close remain serialized; this metadata
+optimization does not allow the spool to change during an upload.
+Read handles validate ETags instead of mixing changed remote ranges.
 Direct I/O disables the kernel page cache; this is not an offline filesystem.
 
 `flush`, `fsync`, and close-triggered flush report remote save errors.
@@ -663,8 +666,11 @@ there is no unbounded or nonexpiring secondary folder-tree snapshot map.
 Notebook definition retrieval builds one immutable snapshot containing the
 lossless multipart definition, decoded ipynb, part index and observation time.
 Lookup/stat/open reuse it without repeating base64 decode. A full-definition
-digest is computed lazily once per snapshot when a writer needs it. Read
-handles pin one version even across expiry or eviction. Attributes and content
+digest is computed lazily once per snapshot when a writer needs it. Digesting
+streams the same JSON representation, including unknown fields and every part,
+without materializing additional full-size JSON/base64 envelopes. This reduces
+temporary allocations without changing wire serialization or conflict checks.
+Read handles pin one version even across expiry or eviction. Attributes and content
 use the **original source observation**, not a second cache insertion time;
 an attribute TTL shorter than the content TTL can therefore require another
 complete export. Derived attributes/listings cannot extend source freshness.
@@ -678,6 +684,76 @@ Explicit `0s` disables the selected layer; an absent value inherits. Catalog
 folders/items always refresh together as one validated tree, never by mixing
 different item-type TTL generations. Configuration is read once at mount time,
 not hot-reloaded.
+
+### Optional mount-level Notebook prewarming
+
+Prewarming is disabled by default. Set `--prewarm-notebooks <count>` to warm
+up to 32 Notebooks across the mounted workspaces after the mount is ready. For
+example, in PowerShell:
+
+```powershell
+.\bin\fabric-workspace-fs.exe mount --workspace 11111111-1111-1111-1111-111111111111 --prewarm-notebooks 16 --notebook-diagnostics M:
+```
+
+One background worker starts after the mount is ready. It discovers Notebooks
+from the mounted workspace catalogs and exports real definitions into the
+existing bounded snapshot cache. It does not access resources or start Spark.
+Ordinary directory enumeration remains demand-free. The public item-list API
+does not provide a trustworthy updated timestamp, so targets are currently
+chosen in stable workspace, display-name and ID order rather than pretending
+that the catalog observation time is an item update time. Positive Notebook
+`attr`, `content` and `definition` TTLs are required per selected item;
+entries with disabled retention are skipped. Prewarming does not override a
+disabled cache, extend source freshness, or keep entries alive periodically.
+
+Any Notebook successfully saved while prewarming is active is also eligible for
+a fresh background export. This moves a potential reopen's wait out of its
+critical path; it does **not** shorten the upload or its required conflict
+check. The exported server content is cached, never the unobserved upload
+request body. Warming shares in-flight reads with foreground callers, uses at
+most one of the four definition slots, and skips work when foreground exports
+are queued or all slots are busy. It also stops speculative exports once
+retained snapshots use half of the 64 MiB snapshot-cache budget, leaving room
+for foreground reads instead of churning large entries. Work is deduplicated
+with a bounded queue. A skipped or failed warm does not disable normal
+on-demand reads and is not automatically retried. Failures are logged; unmount
+cancels and joins the worker.
+
+This is speculative network traffic: startup discovery and saving can cause
+extra exports even if a Notebook is never reopened. Large snapshots can exceed
+cache retention budgets, so a completed warm is not a guarantee of a future
+hit. Prefer a small count, not every Notebook.
+
+### Notebook performance diagnostics
+
+`--notebook-diagnostics` logs phase durations and outcomes without Notebook
+content, tokens or request URLs. Phases distinguish definition-slot waiting,
+definition export, decode/validation, digest, save preparation, fresh save
+preflight, remote update, local spool Sync and flush-lock waiting. Export and
+update durations include authentication, transport and any service-side LRO
+polling; they are not pure server execution time. Some spans are nested
+(preflight includes export), so their durations must not be summed.
+
+Prewarm totals on normal shutdown include queued, completed, skipped and failed
+jobs, cache-budget skips, plus first foreground uses of warmed snapshots.
+Compare these counts and the actual export/update phases alongside latency; a
+faster warm open can come at the cost of more background exports. Shutdown also
+logs definition-cache hits/misses/shared loads, retained/pinned bytes and
+aggregate stage counters. These diagnostics are local; they do not send
+telemetry.
+
+For reproducible offline CPU/allocation and request-count baselines, run the
+Notebook benchmarks in `internal/workspacefs` with Go's `-benchmem`. Mock API
+results are not cloud latency measurements. Compare the same Notebook size,
+cache state and service response mode when collecting real-world timings.
+
+Saving still waits for remote confirmation, including final LRO success.
+There is no local-success/background-upload mode. Such a mode would require a
+durable target/version manifest, recovery queue, visible pending/conflict/error
+state and an explicit remote-persistence barrier; the existing raw recovery
+spool alone does not provide these guarantees.
+
+### Cache policy example
 
 For example, a mount-time JSON policy can override selected surfaces while
 leaving everything else at two minutes:

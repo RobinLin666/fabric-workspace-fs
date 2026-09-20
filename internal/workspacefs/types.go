@@ -67,6 +67,14 @@ const (
 	AgentFile
 )
 
+const (
+	definitionSnapshotMaxEntries = 32
+	definitionSnapshotCacheBytes = 64 << 20
+	// Background prewarming leaves half of the retention budget available for
+	// foreground snapshots instead of repeatedly evicting useful entries.
+	prewarmRetainedByteLimit = definitionSnapshotCacheBytes / 2
+)
+
 type Entry struct {
 	Name           string
 	Label          string
@@ -133,6 +141,13 @@ type Options struct {
 	OverlayMaxEntries  int
 	ResourceBackend    resources.Backend
 	MaxResourceSize    int64
+	// PrewarmNotebookCount enables bounded mount-level Notebook prewarming.
+	// Zero leaves prewarming disabled.
+	PrewarmNotebookCount int
+	PrewarmTimeout       time.Duration
+	// LogNotebookEvent receives bounded, content-free diagnostics.
+	LogNotebookEvent func(NotebookEvent)
+	LogPrewarmError  func(error)
 }
 
 func DefaultOptions() Options {
@@ -163,17 +178,19 @@ type FS struct {
 	mutating bool
 	changed  chan struct{}
 
-	names         namespace.Catalog
-	catalogs      *cache.Cache[*folderTree]
-	snapshots     *cache.Cache[*definitionSnapshot]
-	snapshotSlots chan struct{}
-	resources     resources.Backend
-	decodes       atomic.Uint64
-	digests       atomic.Uint64
-	pinMu         sync.Mutex
-	pinnedBytes   int64
-	pinnedCount   int
-	agentFiles    map[string][]byte
+	names          namespace.Catalog
+	catalogs       *cache.Cache[*folderTree]
+	snapshots      *cache.Cache[*definitionSnapshot]
+	resources      resources.Backend
+	decodes        atomic.Uint64
+	digests        atomic.Uint64
+	pinMu          sync.Mutex
+	pinnedBytes    int64
+	pinnedCount    int
+	agentFiles     map[string][]byte
+	definitionGate definitionGate
+	prewarm        *notebookPrewarmer
+	notebookPerf   notebookPerf
 }
 
 func New(fab FabricAPI, lake LakeAPI, opts Options) (*FS, error) {
@@ -224,7 +241,19 @@ func New(fab FabricAPI, lake LakeAPI, opts Options) (*FS, error) {
 		fabric: newCachedFabric(fab, opts.CachePolicy, opts.Now), lake: newCachedLake(lake, opts.CachePolicy, opts.Now),
 		opts: opts, start: opts.Now(), now: opts.Now, resources: opts.ResourceBackend,
 		active: make(map[string]lease), spools: make(map[string]*writeback.File),
-		changed: make(chan struct{}), snapshotSlots: make(chan struct{}, 4),
+		changed: make(chan struct{}),
+	}
+	if err := ValidatePrewarmCount(opts.PrewarmNotebookCount); err != nil {
+		return nil, err
+	}
+	if opts.PrewarmTimeout < 0 {
+		return nil, fmt.Errorf("prewarm timeout must not be negative: %w", fs.ErrInvalid)
+	}
+	if opts.PrewarmTimeout == 0 {
+		filesystem.opts.PrewarmTimeout = 5 * time.Minute
+	}
+	if opts.PrewarmNotebookCount > 0 {
+		filesystem.prewarm = newNotebookPrewarmer(filesystem)
 	}
 	filesystem.catalogs = cache.New(cache.Options[*folderTree]{
 		TTL: cachepolicy.DefaultTTL, MaxEntries: 32, MaxBytes: 32 << 20, Now: opts.Now,
@@ -232,15 +261,15 @@ func New(fab FabricAPI, lake LakeAPI, opts Options) (*FS, error) {
 		ObservedAt: func(tree *folderTree) time.Time { return tree.observedAt },
 	})
 	filesystem.snapshots = cache.New(cache.Options[*definitionSnapshot]{
-		TTL: cachepolicy.DefaultTTL, MaxEntries: 32, MaxBytes: 64 << 20, Now: opts.Now,
+		TTL: cachepolicy.DefaultTTL, MaxEntries: definitionSnapshotMaxEntries, MaxBytes: definitionSnapshotCacheBytes, Now: opts.Now,
 		Size:       func(snapshot *definitionSnapshot) int64 { return snapshot.bytes },
 		ObservedAt: func(snapshot *definitionSnapshot) time.Time { return snapshot.observedAt },
 	})
-	var err error
-	filesystem.agentFiles, err = agentbundle.Files(opts.Version, opts.FNTKExecutable)
+	agentFiles, err := agentbundle.Files(opts.Version, opts.FNTKExecutable)
 	if err != nil {
 		return nil, err
 	}
+	filesystem.agentFiles = agentFiles
 	if err := filesystem.names.ReserveName("workspaces", namespace.AgentRootName); err != nil {
 		return nil, err
 	}
@@ -248,6 +277,9 @@ func New(fab FabricAPI, lake LakeAPI, opts Options) (*FS, error) {
 }
 
 func (s *FS) Close() error {
+	if s.prewarm != nil {
+		return s.prewarm.close()
+	}
 	return nil
 }
 

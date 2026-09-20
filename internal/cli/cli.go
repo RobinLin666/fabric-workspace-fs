@@ -157,6 +157,8 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 	opts.Version = version
 	var ids workspaceFlags
 	flags.Var(&ids, "workspace", "workspace UUID to expose (repeat up to 64; IDs, not names)")
+	flags.IntVar(&opts.PrewarmNotebookCount, "prewarm-notebooks", 0, "opt-in mount-level definition prewarm count (1..32; 0 disables)")
+	notebookDiagnostics := flags.Bool("notebook-diagnostics", false, "log content-free Notebook phase durations and prewarm totals")
 	flags.BoolVar(&opts.AllWorkspaces, "all-workspaces", false, "expose every workspace visible to the identity")
 	flags.BoolVar(&opts.ReadOnly, "read-only", false, "reject all local mutations")
 	flags.StringVar(&opts.SpoolDirectory, "spool-dir", "", "private local writeback/recovery directory (default user cache/fabric-workspace-fs/spool)")
@@ -197,6 +199,21 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 		return 2
 	}
 	opts.CachePolicy = policy
+	opts.WorkspaceIDs = ids
+	if err := workspacefs.ValidatePrewarmCount(opts.PrewarmNotebookCount); err != nil {
+		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	opts.PrewarmTimeout = *operationTimeout
+	logger := log.New(stderr, "fabric-workspace-fs: ", log.LstdFlags)
+	opts.LogPrewarmError = func(err error) {
+		logger.Printf("notebook prewarm failed: %v", err)
+	}
+	if *notebookDiagnostics {
+		opts.LogNotebookEvent = func(event workspacefs.NotebookEvent) {
+			logger.Printf("notebook stage=%s elapsed=%s result=%s", event.Stage, event.Elapsed, event.Result)
+		}
+	}
 	if err := validateFNTKExecutable(opts.FNTKExecutable); err != nil {
 		fmt.Fprintln(stderr, err)
 		return 2
@@ -266,6 +283,12 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 		if err := backend.Close(); err != nil {
 			fmt.Fprintf(stderr, "close filesystem: %v\n", err)
 		}
+		if *notebookDiagnostics {
+			logger.Printf("notebook prewarm totals: %+v", backend.PrewarmStats())
+			logger.Printf("definition cache totals: %+v", backend.DefinitionCacheStats())
+			logger.Printf("definition snapshot totals: %+v", backend.SnapshotStats())
+			logger.Printf("notebook stage totals: %+v", backend.NotebookStats())
+		}
 	}()
 	// Fail immediately on invalid selection/auth rather than mounting an
 	// apparently empty catalog that silently hides permission failures.
@@ -275,7 +298,7 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 	if err != nil {
 		return runtimeError(stderr, err)
 	}
-	server, err := fusefs.Mount(point, backend, fusefs.Options{ReadOnly: opts.ReadOnly, Logger: log.New(stderr, "fabric-workspace-fs: ", log.LstdFlags)})
+	server, err := fusefs.Mount(point, backend, fusefs.Options{ReadOnly: opts.ReadOnly, Logger: logger})
 	if err != nil {
 		if server != nil {
 			closeBackend = false
@@ -289,6 +312,15 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 			closeBackend = false
 		}
 		return runtimeError(stderr, errors.Join(err, unmountErr))
+	}
+	if opts.PrewarmNotebookCount != 0 {
+		if err := backend.StartPrewarm(ctx); err != nil {
+			unmountErr := server.Unmount()
+			if unmountErr != nil {
+				closeBackend = false
+			}
+			return runtimeError(stderr, errors.Join(err, unmountErr))
+		}
 	}
 	fmt.Fprintf(stdout, "Mounted Fabric workspaces at %q (foreground; Ctrl+C to unmount).\n", point)
 	if !opts.ReadOnly {
