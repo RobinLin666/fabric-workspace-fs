@@ -124,7 +124,8 @@ class NotebookRuntimeTransport(FabricTransport):
                     await self._open_channel()
                     await self._kernel_info()
                     await self._configure()
-                    await self._wait_state({"idle"}, START_TIMEOUT - 30)
+                    if self.target.language.is_spark:
+                        await self._wait_state({"idle"}, START_TIMEOUT - 30)
                     self._ready = True
                     self._refresh = asyncio.create_task(self._refresh_loop())
                     return self.status()
@@ -407,7 +408,12 @@ class NotebookRuntimeTransport(FabricTransport):
             return
         stop_error: RuntimeFailure | None = None
         try:
-            if self._ws is not None and "control" in self._comms and not self._failure:
+            if (
+                self.target.language.is_spark
+                and self._ws is not None
+                and "control" in self._comms
+                and not self._failure
+            ):
                 try:
                     await self._control("stop_livy_session")
                     await self._wait_state({"dead", "killed", "stopped", "not_started"}, 60)

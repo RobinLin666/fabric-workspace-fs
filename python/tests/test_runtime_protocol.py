@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import asyncio
 import json
+from contextlib import suppress
 from unittest.mock import AsyncMock
 
 import pytest
@@ -47,6 +48,37 @@ def test_runtime_configures_each_supported_kernel(
         assert [
             call.args for call in runtime._control.call_args_list[-len(control_messages):]
         ] == control_messages
+
+    asyncio.run(run())
+
+
+@pytest.mark.parametrize(
+    ("language", "wait_for_idle"),
+    [
+        (FabricLanguage.PYSPARK, True),
+        (FabricLanguage.SPARK, True),
+        (FabricLanguage.SPARKR, True),
+        (FabricLanguage.PYTHON311, False),
+        (FabricLanguage.PYTHON312, False),
+    ],
+)
+def test_runtime_waits_for_livy_only_for_spark_kernels(
+    language: FabricLanguage, wait_for_idle: bool
+) -> None:
+    async def run() -> None:
+        runtime = NotebookRuntimeTransport(
+            FabricTarget(TARGET.workspace_id, TARGET.notebook_id, language)
+        )
+        runtime._allocate = AsyncMock()
+        runtime._open_channel = AsyncMock()
+        runtime._kernel_info = AsyncMock()
+        runtime._configure = AsyncMock()
+        runtime._wait_state = AsyncMock()
+        await runtime.start()
+        assert runtime._wait_state.await_count == int(wait_for_idle)
+        runtime._refresh.cancel()
+        with suppress(asyncio.CancelledError):
+            await runtime._refresh
 
     asyncio.run(run())
 
@@ -165,6 +197,35 @@ def test_shutdown_stops_only_allocated_session_and_verifies_404():
             ("GET", "/api/sessions/33333333-3333-3333-3333-333333333333"),
         ]
         assert requests[-1][2]["expected"] == (404,)
+
+    asyncio.run(run())
+
+
+def test_pure_python_shutdown_does_not_stop_a_livy_session():
+    async def run() -> None:
+        controls = []
+
+        class Access:
+            async def runtime_request(self, method, path, **kwargs):
+                return (404, None) if method == "GET" else (204, None)
+
+            async def close(self):
+                pass
+
+        class Socket:
+            async def close(self):
+                pass
+
+        target = FabricTarget(
+            TARGET.workspace_id, TARGET.notebook_id, FabricLanguage.PYTHON312
+        )
+        runtime = NotebookRuntimeTransport(target, access=Access())
+        runtime._session_id = "33333333-3333-3333-3333-333333333333"
+        runtime._ws = Socket()
+        runtime._comms["control"] = "control"
+        runtime._control = AsyncMock(side_effect=lambda *args: controls.append(args))
+        await runtime.shutdown(target)
+        assert controls == []
 
     asyncio.run(run())
 
