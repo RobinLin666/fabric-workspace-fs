@@ -297,9 +297,10 @@ def _set_dacl_from_sddl(path: Path, sddl: str) -> None:
 
 
 def owner_only_sddl() -> str:
-    """Return a protected DACL SDDL string that grants only the current user full access."""
+    """Return a descriptor that makes the current user owner with exclusive full access."""
 
-    return f"D:P(A;;FA;;;{current_user_sid_string()})"
+    current_user_sid = current_user_sid_string()
+    return f"O:{current_user_sid}D:P(A;;FA;;;{current_user_sid})"
 
 
 def set_owner_only_dacl(path: Path) -> None:
