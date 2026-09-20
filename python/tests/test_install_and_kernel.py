@@ -27,6 +27,16 @@ def _get_shell_reply(client, message_id: str) -> dict:
             return reply
 
 
+def _isolated_kernel_env(local_state: Path) -> dict[str, str]:
+    env = os.environ.copy()
+    env["JUPYTER_DATA_DIR"] = str(local_state / "jupyter")
+    env["XDG_CONFIG_HOME"] = str(local_state / "config")
+    env["XDG_STATE_HOME"] = str(local_state / "state")
+    env["APPDATA"] = str(local_state / "config")
+    env["LOCALAPPDATA"] = str(local_state / "state")
+    return env
+
+
 def test_user_kernelspec_install(local_state: Path, monkeypatch) -> None:
     monkeypatch.setenv("JUPYTER_DATA_DIR", str(local_state / "jupyter"))
     installed = install_kernels()
@@ -46,12 +56,7 @@ def test_generated_default_kernelspec_starts_without_profile_or_broker(
     install_kernels()
     assert not broker_endpoint_path().exists()
 
-    env = os.environ.copy()
-    env["JUPYTER_DATA_DIR"] = str(local_state / "jupyter")
-    env["XDG_CONFIG_HOME"] = str(local_state / "config")
-    env["XDG_STATE_HOME"] = str(local_state / "state")
-    env["APPDATA"] = str(local_state / "config")
-    env["LOCALAPPDATA"] = str(local_state / "state")
+    env = _isolated_kernel_env(local_state)
 
     manager = KernelManager(
         kernel_name="fabric-pyspark", kernel_spec_manager=KernelSpecManager()
@@ -86,6 +91,51 @@ def test_generated_default_kernelspec_starts_without_profile_or_broker(
             manager.shutdown_kernel(now=True)
 
 
+def test_generated_default_kernelspec_control_shutdown_has_clean_stderr(
+    local_state: Path, monkeypatch
+) -> None:
+    monkeypatch.setenv("JUPYTER_DATA_DIR", str(local_state / "jupyter"))
+    install_kernels()
+    env = _isolated_kernel_env(local_state)
+
+    manager = KernelManager(
+        kernel_name="fabric-pyspark", kernel_spec_manager=KernelSpecManager()
+    )
+    client = None
+    process = None
+    try:
+        manager.start_kernel(env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
+        process = getattr(manager.provisioner, "process", None)
+        client = manager.client()
+        client.start_channels()
+        client.wait_for_ready(timeout=15)
+        message_id = client.execute("print('not evaluated')")
+        assert _get_shell_reply(client, message_id)["content"]["status"] == "ok"
+
+        shutdown_reply = client.shutdown(restart=False, reply=True, timeout=15)
+        assert shutdown_reply["content"] == {"status": "ok", "restart": False}
+
+        deadline = time.monotonic() + 15
+        while manager.is_alive() and time.monotonic() < deadline:
+            time.sleep(0.05)
+        assert not manager.is_alive()
+    finally:
+        if client is not None:
+            with suppress(Exception):
+                client.stop_channels()
+        if manager.has_kernel and manager.is_alive():
+            with suppress(Exception):
+                manager.shutdown_kernel(now=True)
+
+    stderr = ""
+    if process is not None and process.stderr is not None:
+        raw_stderr = process.stderr.read()
+        stderr = raw_stderr.decode("utf-8", errors="replace") if isinstance(raw_stderr, bytes) else raw_stderr
+    assert "Future attached to a different loop" not in stderr
+    assert "Traceback" not in stderr
+    assert "ERROR" not in stderr
+
+
 def test_real_jupyter_client_with_fake_broker(
     local_state: Path, monkeypatch
 ) -> None:
@@ -116,9 +166,7 @@ def test_real_jupyter_client_with_fake_broker(
         )
     )
     monkeypatch.setenv("JUPYTER_DATA_DIR", str(local_state / "jupyter"))
-    env = os.environ.copy()
-    env["XDG_CONFIG_HOME"] = str(local_state / "config")
-    env["XDG_STATE_HOME"] = str(local_state / "state")
+    env = _isolated_kernel_env(local_state)
     broker = subprocess.Popen(
         [sys.executable, "-m", "fabric_jupyter", "broker", "--idle-timeout", "60"],
         env=env,

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from typing import Any, cast
@@ -36,6 +37,7 @@ class FabricKernel(IPythonKernel):
         self._target: FabricTarget | None = None
         self._client: BrokerClient | None = None
         self._embedded_broker: BrokerServer | None = None
+        self._embedded_broker_loop: asyncio.AbstractEventLoop | None = None
         self._startup_error: str | None = None
         try:
             profile = load_profiles().get(name)
@@ -67,6 +69,7 @@ class FabricKernel(IPythonKernel):
                 idle_timeout_seconds=self._profile.idle_timeout_seconds
             )
             endpoint = await self._embedded_broker.start(persist_endpoint=False)
+            self._embedded_broker_loop = asyncio.get_running_loop()
             self._client = BrokerClient(endpoint)
             return self._client
         except (OSError, RuntimeError, ValueError) as exc:
@@ -147,10 +150,27 @@ class FabricKernel(IPythonKernel):
                 if self._client is not None and self._target is not None:
                     await self._client.shutdown(self._target)
             finally:
-                if self._embedded_broker is not None:
-                    await self._embedded_broker.close()
-                    self._embedded_broker = None
+                await self._close_embedded_broker()
         return {"status": "ok", "restart": restart}
+
+    async def _close_embedded_broker(self) -> None:
+        broker = self._embedded_broker
+        if broker is None:
+            return
+        self._embedded_broker = None
+        self._client = None
+        broker_loop = self._embedded_broker_loop
+        self._embedded_broker_loop = None
+        try:
+            running_loop = asyncio.get_running_loop()
+        except RuntimeError:
+            running_loop = None
+        if broker_loop is None or broker_loop is running_loop:
+            await broker.close()
+            return
+        if broker_loop.is_closed():
+            return
+        broker_loop.call_soon_threadsafe(lambda: broker_loop.create_task(broker.close()))
 
 
 def _diagnostic(context: str, exc: BaseException) -> str:
