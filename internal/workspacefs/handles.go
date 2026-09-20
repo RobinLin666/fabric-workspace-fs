@@ -142,6 +142,7 @@ func (s *FS) openNotebook(ctx context.Context, e Entry, flags int) (Handle, erro
 		InitialSize: int64(len(data)), Truncate: flags&os.O_TRUNC != 0, Append: flags&os.O_APPEND != 0,
 		Load:   func(_ context.Context, w io.Writer) error { _, err := w.Write(data); return err },
 		Commit: s.notebookCommit(e, snapshot, snapshot.notebook), OnClose: s.closeSpool(e, release),
+		Observe: s.observeNotebook,
 	})
 	if err != nil {
 		return nil, err

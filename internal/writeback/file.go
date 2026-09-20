@@ -8,6 +8,8 @@ import (
 	"io/fs"
 	"os"
 	"sync"
+	"sync/atomic"
+	"time"
 
 	"fabric-workspace-fs/internal/fserrors"
 )
@@ -23,6 +25,9 @@ type Options struct {
 	Load        func(context.Context, io.Writer) error
 	Commit      Commit
 	OnClose     func()
+	// Observe receives flush_lock and spool_sync timings outside the I/O lock.
+	// Calls may be concurrent; observers must be concurrency-safe.
+	Observe func(stage string, elapsed time.Duration, err error)
 }
 
 // RecoveryError means the remote save did not finish. Path is deliberately
@@ -39,10 +44,12 @@ func (e *RecoveryError) Error() string {
 func (e *RecoveryError) Unwrap() error { return e.Cause }
 
 type File struct {
-	mu       sync.Mutex
-	file     *os.File
-	path     string
-	size     int64
+	mu   sync.Mutex
+	file *os.File
+	path string
+	// size publishes completed local mutations without waiting for a remote
+	// commit. All spool I/O, including commits, remains serialized by mu.
+	size     atomic.Int64
 	maxSize  int64
 	append   bool
 	dirty    bool
@@ -51,6 +58,7 @@ type File struct {
 	closeErr error
 	commit   Commit
 	onClose  func()
+	observe  func(string, time.Duration, error)
 }
 
 func Open(ctx context.Context, opts Options) (*File, error) {
@@ -89,11 +97,13 @@ func Open(ctx context.Context, opts Options) (*File, error) {
 			return cleanup(fmt.Errorf("initial size changed: expected %d, read %d: %w", size, stat.Size(), fserrors.ErrConflict))
 		}
 	}
-	return &File{
-		file: temp, path: temp.Name(), size: size, maxSize: opts.MaxSize,
+	f := &File{
+		file: temp, path: temp.Name(), maxSize: opts.MaxSize,
 		append: opts.Append, dirty: opts.Truncate && opts.InitialSize != 0,
-		commit: opts.Commit, onClose: opts.OnClose,
-	}, nil
+		commit: opts.Commit, onClose: opts.OnClose, observe: opts.Observe,
+	}
+	f.size.Store(size)
+	return f, nil
 }
 
 type boundedWriter struct {
@@ -132,7 +142,7 @@ func (f *File) WriteAt(p []byte, offset int64) (int, error) {
 		return 0, fs.ErrInvalid
 	}
 	if f.append {
-		offset = f.size
+		offset = f.size.Load()
 	}
 	if len(p) == 0 {
 		return 0, nil
@@ -143,7 +153,7 @@ func (f *File) WriteAt(p []byte, offset int64) (int, error) {
 	n, err := f.file.WriteAt(p, offset)
 	if n > 0 {
 		f.dirty = true
-		f.size = max(f.size, offset+int64(n))
+		f.size.Store(max(f.size.Load(), offset+int64(n)))
 	}
 	return n, err
 }
@@ -160,19 +170,36 @@ func (f *File) Truncate(size int64) error {
 	if size > f.maxSize {
 		return fserrors.ErrTooLarge
 	}
-	if f.size == size {
+	if f.size.Load() == size {
 		return nil
 	}
 	if err := f.file.Truncate(size); err != nil {
 		return err
 	}
-	f.size, f.dirty = size, true
+	f.size.Store(size)
+	f.dirty = true
 	return nil
 }
 
 func (f *File) Flush(ctx context.Context) error {
+	started := time.Now()
 	f.mu.Lock()
-	defer f.mu.Unlock()
+	observe := f.observe
+	var lockElapsed, syncElapsed time.Duration
+	var syncErr error
+	var synced bool
+	if observe != nil {
+		lockElapsed = time.Since(started)
+	}
+	defer func() {
+		f.mu.Unlock()
+		if observe != nil {
+			observe("flush_lock", lockElapsed, nil)
+			if synced {
+				observe("spool_sync", syncElapsed, syncErr)
+			}
+		}
+	}()
 	if f.closed {
 		return fserrors.ErrClosed
 	}
@@ -183,11 +210,19 @@ func (f *File) Flush(ctx context.Context) error {
 		f.lastSave = err
 		return err
 	}
-	if err := f.file.Sync(); err != nil {
-		f.lastSave = err
-		return err
+	if observe != nil {
+		started = time.Now()
 	}
-	if err := f.commit(ctx, f.file, f.size); err != nil {
+	syncErr = f.file.Sync()
+	synced = true
+	if observe != nil {
+		syncElapsed = time.Since(started)
+	}
+	if syncErr != nil {
+		f.lastSave = syncErr
+		return syncErr
+	}
+	if err := f.commit(ctx, f.file, f.size.Load()); err != nil {
 		f.lastSave = err
 		return err
 	}
@@ -196,9 +231,7 @@ func (f *File) Flush(ctx context.Context) error {
 }
 
 func (f *File) Size() int64 {
-	f.mu.Lock()
-	defer f.mu.Unlock()
-	return f.size
+	return f.size.Load()
 }
 
 func (f *File) Dirty() bool {
@@ -229,6 +262,6 @@ func (f *File) Close() error {
 	}
 	// Closed descriptors must not pin old decoded definitions or resource
 	// snapshots after their byte reservation has been released.
-	f.commit, f.onClose = nil, nil
+	f.commit, f.onClose, f.observe = nil, nil, nil
 	return f.closeErr
 }
