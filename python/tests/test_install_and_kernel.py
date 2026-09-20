@@ -45,7 +45,9 @@ def test_user_kernelspec_install(local_state: Path, monkeypatch) -> None:
     spec = json.loads((kernels / "fabric-pyspark" / "kernel.json").read_text())
     assert spec["argv"][2:4] == ["fabric_jupyter", "kernel"]
     assert spec["argv"][4:6] == ["-f", "{connection_file}"]
-    assert spec["display_name"] == "fabric-jupyter (PySpark)"
+    assert spec["display_name"] == "fabric-jupyter (PySpark; offline fake)"
+    assert spec["metadata"]["fabric_jupyter"]["remoteFabricSessionSupported"] is False
+    assert spec["metadata"]["fabric_jupyter"]["executionMode"] == "offline-simulation"
     assert spec["metadata"]["fabric_jupyter"]["capabilities"]["widgets"] is False
 
 
@@ -168,7 +170,7 @@ def test_real_jupyter_client_with_fake_broker(
     monkeypatch.setenv("JUPYTER_DATA_DIR", str(local_state / "jupyter"))
     env = _isolated_kernel_env(local_state)
     broker = subprocess.Popen(
-        [sys.executable, "-m", "fabric_jupyter", "broker", "--idle-timeout", "60"],
+        [sys.executable, "-m", "fabric_jupyter", "broker", "--profile", "test", "--idle-timeout", "60"],
         env=env,
         stdout=subprocess.PIPE,
         stderr=subprocess.PIPE,

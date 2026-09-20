@@ -53,11 +53,13 @@ def parse_execute(params: Mapping[str, Any]) -> ExecutionRequest:
     target = params.get("target")
     if not isinstance(target, Mapping) or not isinstance(params.get("code"), str):
         raise ValueError("execute requires target object and code string")
+    if not isinstance(params.get("requestId"), str) or not isinstance(params.get("silent", False), bool):
+        raise ValueError("execute requires a string requestId and boolean silent flag")
     return ExecutionRequest(
-        request_id=str(params.get("requestId", "")),
+        request_id=params["requestId"],
         target=FabricTarget.from_dict(target),
         code=params["code"],
-        silent=bool(params.get("silent", False)),
+        silent=params.get("silent", False),
     )
 
 

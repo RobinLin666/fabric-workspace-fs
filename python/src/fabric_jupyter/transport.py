@@ -1,4 +1,4 @@
-"""Transport boundary. Only the deterministic fake transport executes by default."""
+"""Transport boundary. Only deterministic offline simulation is available."""
 
 from __future__ import annotations
 
@@ -36,7 +36,8 @@ class FakeFabricTransport(FabricTransport):
     async def execute(self, request: ExecutionRequest) -> AsyncIterator[ExecutionEvent]:
         self.executions.append(request)
         yield ExecutionEvent(
-            EventKind.STREAM, {"name": "stdout", "text": "[fake Fabric] request accepted\n"}
+            EventKind.STREAM,
+            {"name": "stdout", "text": "[offline fake] request accepted; no Fabric connection\n"},
         )
         await asyncio.sleep(0)
         if request.code.strip().startswith("raise"):
@@ -53,7 +54,12 @@ class FakeFabricTransport(FabricTransport):
             yield ExecutionEvent(
                 EventKind.RESULT,
                 {
-                    "data": {"text/plain": "Fake Fabric execution completed"},
+                    "data": {
+                        "text/plain": (
+                            "Offline simulation complete; no code was evaluated "
+                            "and no Fabric session was created."
+                        )
+                    },
                     "metadata": {},
                     "execution_count": 1,
                 },
@@ -73,7 +79,8 @@ class ExperimentalFabricTransport(FabricTransport):
         del request
         raise RuntimeError(
             "the experimental Fabric transport is not configured in this release; "
-            "no undocumented endpoint or credential flow will be attempted"
+            "no undocumented endpoint or credential flow will be attempted. "
+            "Run `fabric-jupyter runtime-status --require-fabric` for readiness blockers"
         )
         yield  # pragma: no cover
 
@@ -89,4 +96,6 @@ class ExperimentalFabricTransport(FabricTransport):
 def make_transport(kind: TransportKind) -> FabricTransport:
     if kind is TransportKind.FAKE:
         return FakeFabricTransport()
-    return ExperimentalFabricTransport()
+    if kind is TransportKind.EXPERIMENTAL:
+        return ExperimentalFabricTransport()
+    raise ValueError("unsupported transport; no real Fabric transport is available")

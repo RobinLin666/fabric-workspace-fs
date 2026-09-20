@@ -10,20 +10,32 @@ import secrets
 import time
 from collections.abc import Awaitable, Mapping
 from contextlib import suppress
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
+from .config import default_profiles
 from .models import (
     BrokerSession,
     EventKind,
     ExecutionEvent,
     FabricTarget,
+    Profile,
     SessionState,
     TransportKind,
 )
-from .paths import broker_endpoint_path, broker_socket_path, ensure_private
+from .paths import (
+    broker_endpoint_path,
+    broker_socket_path,
+    ensure_private,
+    secure_private_file,
+    state_dir,
+    verify_private_directory,
+    verify_private_file,
+    verify_private_socket,
+)
 from .protocol import (
+    MAX_MESSAGE_BYTES,
     PROTOCOL_VERSION,
     decode_message,
     encode_message,
@@ -32,6 +44,7 @@ from .protocol import (
     parse_execute,
     request_from_message,
 )
+from .targets import resolve_target
 from .transport import FabricTransport, make_transport
 
 
@@ -75,13 +88,31 @@ class BrokerServer:
         transport: FabricTransport | None = None,
         idle_timeout_seconds: int = 900,
         endpoint: BrokerEndpoint | None = None,
+        profile: Profile | None = None,
     ) -> None:
+        self._profile = profile or default_profiles()["fabric-pyspark"]
+        if self._profile.transport is not TransportKind.FAKE:
+            raise ValueError(
+                "real Fabric transport is unavailable; broker will not start. "
+                "Run `fabric-jupyter runtime-status --require-fabric`"
+            )
+        self._target = resolve_target(self._profile)
         self._transport = transport or make_transport(TransportKind.FAKE)
         self._idle_timeout_seconds = idle_timeout_seconds
         self._endpoint = endpoint
         self._server: asyncio.AbstractServer | None = None
         self._sessions: dict[tuple[str, str, str], BrokerSession] = {}
         self._cleanup_task: asyncio.Task[None] | None = None
+        self._endpoint_file: Path | None = None
+
+    def _authorize_target(self, target: FabricTarget) -> FabricTarget:
+        if (
+            target.workspace_id.lower() != self._target.workspace_id.lower()
+            or target.notebook_id.lower() != self._target.notebook_id.lower()
+            or target.language is not self._target.language
+        ):
+            raise ValueError("request target is not authorized by this broker's startup profile")
+        return self._target
 
     @property
     def endpoint(self) -> BrokerEndpoint:
@@ -92,48 +123,66 @@ class BrokerServer:
     async def start(self, *, persist_endpoint: bool = False) -> BrokerEndpoint:
         if self._server is not None:
             return self.endpoint
+        ensure_private(state_dir())
+        if persist_endpoint and broker_endpoint_path().exists():
+            raise FileExistsError("broker descriptor already exists; stop its owning broker first")
         if self._endpoint is None:
-            self._endpoint = self._new_endpoint()
+            self._endpoint = self._new_endpoint(persist_endpoint=persist_endpoint)
         if self._endpoint.transport == "unix":
             path = Path(self._endpoint.address)
             ensure_private(path.parent)
-            with suppress(FileNotFoundError):
-                path.unlink()
+            if path.exists():
+                raise FileExistsError("broker socket already exists; do not replace a running broker")
             start_unix_server = getattr(asyncio, "start_unix_server", None)
             if start_unix_server is None:
                 raise RuntimeError("Unix socket broker endpoints are unavailable on this platform")
             self._server = await cast(
                 Awaitable[asyncio.AbstractServer],
-                start_unix_server(self._handle, path=str(path)),
+                start_unix_server(self._handle, path=str(path), limit=MAX_MESSAGE_BYTES + 1),
             )
-            if os.name != "nt":
+            try:
                 path.chmod(0o600)
+                verify_private_socket(path)
+            except (OSError, RuntimeError, ValueError):
+                await self.close()
+                raise
         else:
             host, port = self._endpoint.address.rsplit(":", 1)
-            self._server = await asyncio.start_server(self._handle, host=host, port=int(port))
+            if host != "127.0.0.1" or not port.isdecimal() or not 0 <= int(port) <= 65535:
+                raise ValueError("broker TCP listener must use 127.0.0.1 and a valid port")
+            self._server = await asyncio.start_server(
+                self._handle, host=host, port=int(port), limit=MAX_MESSAGE_BYTES + 1,
+            )
             actual_port = self._server.sockets[0].getsockname()[1]
             self._endpoint = BrokerEndpoint("tcp", f"127.0.0.1:{actual_port}", self._endpoint.auth)
         self._cleanup_task = asyncio.create_task(self._cleanup_loop())
         if persist_endpoint:
-            self.write_endpoint()
+            try:
+                self.write_endpoint()
+            except (OSError, RuntimeError, ValueError):
+                await self.close()
+                raise
         return self.endpoint
 
-    def _new_endpoint(self) -> BrokerEndpoint:
+    def _new_endpoint(self, *, persist_endpoint: bool) -> BrokerEndpoint:
         auth = secrets.token_urlsafe(32)
         if os.name == "nt":
             return BrokerEndpoint("tcp", "127.0.0.1:0", auth)
-        return BrokerEndpoint("unix", str(broker_socket_path()), auth)
+        path = broker_socket_path()
+        if not persist_endpoint:
+            path = path.with_name(f"kernel-{secrets.token_hex(6)}.sock")
+        return BrokerEndpoint("unix", str(path), auth)
 
     def write_endpoint(self) -> Path:
         location = broker_endpoint_path()
+        if location.exists():
+            raise FileExistsError("refusing to replace an existing broker descriptor")
         temporary = location.with_suffix(".tmp")
-        with open(temporary, "x", encoding="utf-8") as stream:
-            if os.name != "nt":
-                os.chmod(temporary, 0o600)
+        with secure_private_file(temporary) as stream:
             json.dump(self.endpoint.to_private_dict(), stream, separators=(",", ":"))
         temporary.replace(location)
-        if os.name != "nt":
-            location.chmod(0o600)
+        verify_private_file(location)
+        self._endpoint_file = location
         return location
 
     async def close(self) -> None:
@@ -154,12 +203,21 @@ class BrokerServer:
         if self._endpoint is not None and self._endpoint.transport == "unix":
             with suppress(FileNotFoundError):
                 Path(self._endpoint.address).unlink()
+        if self._endpoint_file is not None:
+            with suppress(FileNotFoundError):
+                recorded = load_endpoint(self._endpoint_file)
+                if hmac.compare_digest(recorded.auth, self.endpoint.auth):
+                    self._endpoint_file.unlink()
+            self._endpoint_file = None
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            raw = await reader.readline()
+            raw = await asyncio.wait_for(reader.readline(), timeout=30)
             message = decode_message(raw)
-            if not hmac.compare_digest(str(message.get("auth", "")), self.endpoint.auth):
+            provided_auth = message.get("auth")
+            if not isinstance(provided_auth, str) or not hmac.compare_digest(
+                provided_auth.encode("utf-8"), self.endpoint.auth.encode("utf-8"),
+            ):
                 await self._send_error(writer, "unauthorized")
                 return
             method, params = request_from_message(message)
@@ -170,9 +228,13 @@ class BrokerServer:
             elif method == "shutdown":
                 await self._shutdown(params, writer)
             elif method == "status":
+                if params:
+                    raise ValueError("status takes no parameters")
                 await self._status(writer)
             else:
                 await self._send_error(writer, "unknown method")
+        except TimeoutError:
+            await self._send_error(writer, "broker request timed out")
         except (ValueError, RuntimeError) as exc:
             await self._send_error(writer, str(exc))
         finally:
@@ -183,6 +245,9 @@ class BrokerServer:
     async def _execute(self, params: Mapping[str, Any], writer: asyncio.StreamWriter) -> None:
         request = parse_execute(params)
         transport_kind = TransportKind(str(params.get("transport", "fake")))
+        if transport_kind is not self._profile.transport:
+            raise ValueError("request transport is not authorized by this broker's startup profile")
+        request = replace(request, target=self._authorize_target(request.target))
         key = (
             request.target.workspace_id,
             request.target.notebook_id,
@@ -200,11 +265,7 @@ class BrokerServer:
             writer, event_message(ExecutionEvent(EventKind.STATUS, {"execution_state": "busy"}))
         )
         try:
-            if transport_kind is not TransportKind.FAKE:
-                transport = make_transport(transport_kind)
-            else:
-                transport = self._transport
-            async for event in transport.execute(request):
+            async for event in self._transport.execute(request):
                 await self._send(writer, event_message(event))
         except RuntimeError as exc:
             await self._send(
@@ -229,12 +290,12 @@ class BrokerServer:
             await self._send(writer, {"done": True})
 
     async def _interrupt(self, params: Mapping[str, Any], writer: asyncio.StreamWriter) -> None:
-        target = _target_from_params(params)
+        target = self._authorize_target(_target_from_params(params))
         await self._transport.interrupt(target)
         await self._send(writer, {"ok": True})
 
     async def _shutdown(self, params: Mapping[str, Any], writer: asyncio.StreamWriter) -> None:
-        target = _target_from_params(params)
+        target = self._authorize_target(_target_from_params(params))
         key = (target.workspace_id, target.notebook_id, target.language.value)
         session = self._sessions.pop(key, None)
         if session is not None:
@@ -266,6 +327,8 @@ class BrokerServer:
 
 
 def _target_from_params(params: Mapping[str, Any]) -> FabricTarget:
+    if set(params) != {"target"}:
+        raise ValueError("interrupt and shutdown require only a target parameter")
     target = params.get("target")
     if not isinstance(target, Mapping):
         raise ValueError("request requires target")
@@ -274,8 +337,8 @@ def _target_from_params(params: Mapping[str, Any]) -> FabricTarget:
 
 def load_endpoint(path: Path | None = None) -> BrokerEndpoint:
     location = path or broker_endpoint_path()
-    if location.is_symlink():
-        raise ValueError("broker endpoint file must not be a symlink")
+    verify_private_directory(location.parent)
+    verify_private_file(location)
     value = json.loads(location.read_text(encoding="utf-8"))
     if not isinstance(value, Mapping):
         raise ValueError("broker endpoint must be an object")
@@ -341,9 +404,9 @@ class BrokerClient:
             await writer.drain()
             values: list[dict[str, Any]] = []
             while True:
-                raw = await reader.readline()
+                raw = await asyncio.wait_for(reader.readline(), timeout=30)
                 if not raw:
-                    break
+                    raise RuntimeError("broker closed the connection before completing its response")
                 value = decode_message(raw)
                 if "error" in value:
                     raise RuntimeError(str(value["error"]))
@@ -365,9 +428,9 @@ class BrokerClient:
                 raise RuntimeError("Unix socket broker endpoints are unavailable on this platform")
             return await cast(
                 Awaitable[tuple[asyncio.StreamReader, asyncio.StreamWriter]],
-                open_unix_connection(self.endpoint.address),
+                open_unix_connection(self.endpoint.address, limit=MAX_MESSAGE_BYTES + 1),
             )
         host, port = self.endpoint.address.rsplit(":", 1)
         if host != "127.0.0.1":
             raise ValueError("broker TCP endpoint must be loopback")
-        return await asyncio.open_connection(host, int(port))
+        return await asyncio.open_connection(host, int(port), limit=MAX_MESSAGE_BYTES + 1)

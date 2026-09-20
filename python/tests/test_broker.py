@@ -6,7 +6,7 @@ from pathlib import Path
 import pytest
 
 from fabric_jupyter.broker import BrokerClient, BrokerEndpoint, BrokerServer, load_endpoint
-from fabric_jupyter.models import FabricLanguage, FabricTarget, TransportKind
+from fabric_jupyter.models import FabricLanguage, FabricTarget, Profile, TransportKind
 from fabric_jupyter.transport import FakeFabricTransport
 
 WORKSPACE = "11111111-1111-1111-1111-111111111111"
@@ -16,10 +16,13 @@ NOTEBOOK = "22222222-2222-2222-2222-222222222222"
 def test_broker_auth_execute_and_cleanup(local_state: Path) -> None:
     async def run() -> None:
         transport = FakeFabricTransport()
-        server = BrokerServer(transport=transport, idle_timeout_seconds=60)
+        target = FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYSPARK)
+        server = BrokerServer(
+            transport=transport, idle_timeout_seconds=60,
+            profile=Profile(name="test", language=FabricLanguage.PYSPARK, target=target),
+        )
         endpoint = await server.start(persist_endpoint=True)
         assert load_endpoint().public_dict() == endpoint.public_dict()
-        target = FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYSPARK)
         events = await BrokerClient(endpoint).execute(
             request_id="request-1",
             target=target,
@@ -36,11 +39,12 @@ def test_broker_auth_execute_and_cleanup(local_state: Path) -> None:
     asyncio.run(run())
 
 
-def test_broker_rejects_wrong_auth(local_state: Path) -> None:
+@pytest.mark.parametrize("invalid_auth", ["wrong", "\u2603"])
+def test_broker_rejects_wrong_auth(local_state: Path, invalid_auth: str) -> None:
     async def run() -> None:
         server = BrokerServer()
         endpoint = await server.start()
-        attacker = BrokerClient(BrokerEndpoint(endpoint.transport, endpoint.address, "wrong"))
+        attacker = BrokerClient(BrokerEndpoint(endpoint.transport, endpoint.address, invalid_auth))
         with pytest.raises(RuntimeError, match="unauthorized"):
             await attacker.status()
         await server.close()

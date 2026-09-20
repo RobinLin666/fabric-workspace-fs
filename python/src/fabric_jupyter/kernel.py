@@ -11,6 +11,7 @@ from uuid import uuid4
 from ipykernel.ipkernel import IPythonKernel
 from ipykernel.kernelapp import IPKernelApp
 
+from . import __version__
 from .broker import BrokerClient, BrokerServer, load_endpoint
 from .config import load_profiles
 from .models import EventKind, FabricTarget, Profile, TransportKind
@@ -21,14 +22,14 @@ class FabricKernel(IPythonKernel):
     """A local adapter: Jupyter speaks only to this process, never to Fabric."""
 
     implementation = "fabric-jupyter"
-    implementation_version = "0.1.0"
+    implementation_version = __version__
     language_info = {
         "name": "python",
         "mimetype": "text/x-python",
         "file_extension": ".py",
         "pygments_lexer": "python",
     }
-    banner = "fabric-jupyter local broker kernel"
+    banner = "fabric-jupyter local protocol adapter: no real Fabric runtime in this release"
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -53,20 +54,20 @@ class FabricKernel(IPythonKernel):
             raise RuntimeError(self._startup_error)
         if self._profile is None or self._target is None:
             raise RuntimeError("fabric-jupyter startup did not produce a runnable profile")
+        if self._profile.transport is not TransportKind.FAKE:
+            raise RuntimeError(
+                "real Fabric transport is unavailable; no credential or session operation "
+                "was attempted. Run `fabric-jupyter runtime-status --require-fabric`"
+            )
         if self._client is not None:
             return self._client
         try:
             self._client = BrokerClient(load_endpoint())
             return self._client
         except FileNotFoundError:
-            if self._profile.transport is not TransportKind.FAKE:
-                raise RuntimeError(
-                    "broker endpoint was not found; start `fabric-jupyter broker` for "
-                    f"transport '{self._profile.transport.value}' or use the default fake "
-                    "transport for local protocol tests"
-                ) from None
             self._embedded_broker = BrokerServer(
-                idle_timeout_seconds=self._profile.idle_timeout_seconds
+                idle_timeout_seconds=self._profile.idle_timeout_seconds,
+                profile=self._profile,
             )
             endpoint = await self._embedded_broker.start(persist_endpoint=False)
             self._embedded_broker_loop = asyncio.get_running_loop()

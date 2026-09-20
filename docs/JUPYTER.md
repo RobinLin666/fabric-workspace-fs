@@ -21,24 +21,45 @@ starts a private per-kernel broker endpoint when no foreground broker is
 running, replies to Jupyter protocol startup messages, and returns deterministic
 fake execution results without contacting Fabric, Spark, fntk, or a mount.
 
-For a shared local broker process, or for any non-default transport, start the
-broker in a terminal owned by the same local user:
+For a foreground local broker, bind it to one configured profile:
 
 ```sh
-fabric-jupyter broker
+fabric-jupyter broker --profile fabric-pyspark
 ```
 
-Then select **fabric-jupyter (PySpark)** or **fabric-jupyter (Python)** from a
-Jupyter client. The broker runs in the foreground; stopping it stops local
-kernel-to-broker requests. If a configured non-fake transport has no broker
-endpoint, the kernel remains alive and reports an explicit execution error
-instead of dying during `kernel_info`.
+Select **fabric-jupyter (PySpark; offline fake)** or
+**fabric-jupyter (Python; offline fake)** from a Jupyter client. A foreground
+broker accepts only its startup profile's resolved target/language/transport;
+a Python kernel cannot use a PySpark-bound broker. Prefer the default private
+per-kernel brokers when using both languages. Stop the foreground broker before
+changing profiles. Non-fake broker startup fails before binding a listener;
+a non-fake kernel remains alive to report an explicit execution error.
 
 The distribution and command are both named `fabric-jupyter`. The importable
 Python module remains `fabric_jupyter` because Python package names cannot use
 hyphens. Existing kernelspec identifiers (`fabric-pyspark` and
 `fabric-python`) are retained for compatibility; reinstalling updates their
 visible display names without breaking saved Jupyter kernel references.
+Run `fabric-jupyter install-kernels --replace` after an upgrade.
+
+## Real Fabric Runtime status
+
+**This release cannot create or attach a real Fabric Notebook runtime.**
+Local heartbeat, `kernel_info`, and deterministic fake replies prove only the
+local Jupyter protocol adapter, not a cloud connection or Spark readiness.
+
+```sh
+fabric-jupyter runtime-status
+fabric-jupyter runtime-status --require-fabric
+```
+
+Both commands report offline capabilities without authenticating or contacting
+Fabric; the second exits **2** while real sessions are unavailable. The status
+includes `remoteFabricSessionSupported: false` and `remoteCheckPerformed: false`.
+There is no usable `transport: fabric` configuration; unknown transports are
+rejected and `experimental` fails closed. Do not add tokens to kernelspecs or
+profiles. See [runtime prerequisites](JUPYTER_RUNTIME.md) for the specific
+protocol gap and the distinction from the documented Lakehouse Livy API.
 
 ## Profiles and target resolution
 
@@ -51,13 +72,20 @@ fabric-jupyter broker-status
 
 A target is resolved in this order:
 
-1. Explicit workspace and Notebook IDs supplied by an embedding client.
+1. Explicit workspace and Notebook IDs supplied to the library resolver.
 2. The profile's explicit `target`.
 3. A profile's optional `fuseNotebookPath/.fabric.json`.
 
 The generated default profiles include fixed local fake targets so a fresh
 install has no hidden mount or Fabric identity prerequisite. Replace those
-targets only when configuring a reviewed real transport.
+targets only for local tests; configuring real IDs does not enable cloud execution.
+
+Resolution does not grant execution authority. The broker resolves its own
+startup profile once, stores an immutable target policy, and never accepts
+client changes to that policy. Requests for other workspace/Notebook IDs,
+languages, transports, Lakehouses, or Environments are rejected before dispatch.
+Changing the configuration requires restarting the broker; editing a profile
+or optional mount identity cannot retarget a running broker.
 
 The FUSE path is only a convenience identity source. It is optional and is not
 assumed to be mounted. Its `.fabric.json` must identify a `Notebook`; the
@@ -91,19 +119,36 @@ tokens, cookies, passwords, or client secrets in profiles.
 
 The broker accepts only local connections:
 
-- Unix uses one owner-only (`0600`) Unix-domain socket.
+- Unix uses owner-only (`0700`) runtime directories and (`0600`) Unix-domain
+  sockets/descriptors; owner and permissions are checked before use.
 - Windows uses a random loopback port plus a cryptographically random
-  per-broker authentication secret in owner-local runtime state.
+  per-broker authentication secret. Runtime state must have a verified
+  owner-only protected DACL; insecure, redirected/shared, or unverifiable state
+  fails closed rather than starting an unprotected broker.
 
 The secret is not written into kernelspecs, notebooks, mounts, command output,
 or logs. The endpoint descriptor is private local runtime state; it is removed
-when the broker shuts down on Unix. The broker does not listen on a network
-interface and does not provide multi-user access.
+when its owning foreground broker shuts down normally. Embedded brokers do not
+persist a descriptor. The broker does not listen on an external network
+interface and does not provide multi-user access. Local administrators and
+processes already running as the same user are outside this isolation boundary.
 
 The local protocol has a version, strict method/field validation, bounded
 1 MiB messages, and a constant-time authentication comparison. It maintains
-target-bound sessions, supports `execute`, `interrupt`, `shutdown`, and
-idle-session cleanup.
+server-authorized, target-bound local sessions, supports `execute`, `interrupt`,
+`shutdown`, and idle-session cleanup. Possessing a broker token does not grant
+access to an arbitrary target. The token is a per-broker capability, not an
+Azure credential.
+
+On Windows, IPC state is under `%LOCALAPPDATA%\fabric-jupyter\runtime`,
+separate from a user-local `venv`. Profiles remain under
+`%APPDATA%\fabric-jupyter`. Version 0.1.1 validates existing directory ACLs
+instead of silently accepting inherited access. If an upgrade reports an
+insecure directory, stop its broker and review the exact path in the error.
+An owner may explicitly repair only that dedicated directory using the
+suggested PowerShell command, then retry. Never apply such repairs recursively
+to `%APPDATA%`, `%LOCALAPPDATA%`, a home directory, or a virtual environment.
+If an existing ACL or filesystem cannot be verified, the broker stays stopped.
 
 ## Execution behavior and limitations
 

@@ -8,7 +8,7 @@ from pathlib import Path
 from jupyter_client.kernelspec import KernelSpecManager
 
 from .config import load_profiles
-from .models import Profile
+from .models import Profile, TransportKind
 
 
 def kernel_name(profile: Profile) -> str:
@@ -17,7 +17,8 @@ def kernel_name(profile: Profile) -> str:
 
 def kernel_display_name(profile: Profile) -> str:
     language = "PySpark" if profile.language.value == "pyspark" else "Python"
-    return f"fabric-jupyter ({language})"
+    mode = "offline fake" if profile.transport is TransportKind.FAKE else "unavailable"
+    return f"fabric-jupyter ({language}; {mode})"
 
 
 def install_kernels(*, replace: bool = False) -> list[str]:
@@ -53,9 +54,13 @@ def install_kernels(*, replace: bool = False) -> list[str]:
                 "fabric_jupyter": {
                     "profile": profile.name,
                     "transport": profile.transport.value,
+                    "executionMode": (
+                        "offline-simulation" if profile.transport is TransportKind.FAKE else "unavailable"
+                    ),
+                    "remoteFabricSessionSupported": False,
                     "capabilities": {
-                        "execute": True,
-                        "interrupt": True,
+                        "execute": profile.transport is TransportKind.FAKE,
+                        "interrupt": profile.transport is TransportKind.FAKE,
                         "shutdown": True,
                         "completion": False,
                         "inspect": False,

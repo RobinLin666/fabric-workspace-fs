@@ -193,6 +193,7 @@ class BrokerSession:
             "target": self.target.to_dict(),
             "transport": self.transport.value,
             "state": self.state.value,
+            "remoteSession": False,
         }
 
 

@@ -53,11 +53,12 @@ and recovery guidance.
 ```sh
 python -m pip install ./python
 fabric-jupyter install-kernels
-fabric-jupyter broker
+fabric-jupyter runtime-status
 ```
 
-Select a **fabric-jupyter (PySpark)** or **fabric-jupyter (Python)** kernel in
-your Jupyter client. The bundled transport is deliberately offline; see the
+Select a **fabric-jupyter (PySpark; offline fake)** or
+**fabric-jupyter (Python; offline fake)** kernel in your Jupyter client.
+Real Fabric Runtime sessions are **not available** in this release; see the
 [`fabric-jupyter` guide](docs/JUPYTER.md) for profiles, security boundaries,
 capabilities, and limitations.
 
