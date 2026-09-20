@@ -130,8 +130,7 @@ Windows PowerShell:
 # Pick an unused drive letter.
 .\bin\fabric-workspace-fs.exe mount --all-workspaces M:
 
-# Ctrl+C in the foreground process is preferred. If recovery is needed:
-& "$env:ProgramFiles(x86)\WinFsp\bin\fsptool-x64.exe" unmount M:
+# Close files, then press Ctrl+C in the foreground mount terminal.
 ```
 
 macOS:
@@ -144,6 +143,9 @@ diskutil unmount "$HOME/fabric-mount"
 ```
 
 Ctrl+C/SIGTERM also requests unmount and waits for the FUSE server to stop.
+WinFsp 2.1's `fsptool` has no `unmount` command. On Windows, retain access to
+the foreground mount terminal so Ctrl+C can flush and shut down cleanly;
+forcibly terminating a writable mount can lose unflushed changes.
 Losing a stdout/stderr consumer does not terminate the daemon with SIGPIPE;
 use private file-backed logs for unattended mounts to preserve error details.
 Shutdown waits for the **entire serving goroutine**, not merely the reader
@@ -521,6 +523,16 @@ are explicitly rejected; they are not silently discarded.
 Create an empty Notebook item with `mkdir Name.Notebook`, then edit its
 `content.ipynb` in place.
 
+For VS Code saving, the mount must be writable: `--read-only` intentionally
+rejects manual saves and Auto Save alike. Close open files, unmount, and start
+without that flag to permit edits. Normal in-place writes are supported;
+extensions that insist on atomic temporary-sibling replacement or checkpoint
+files are not. This is independent of which Jupyter kernel is selected.
+Use `fsync` / `fdatasync` (Windows `FlushFileBuffers`) before close when a
+caller needs to verify remote persistence immediately. A Windows close-only
+write can return before the filesystem's cleanup flush completes; it is not
+a persistence barrier.
+
 Before a save, the client fetches the full current `ipynb` definition and
 compares it with the open-time/save-time snapshot. It changes only the existing
 content part, preserves unknown JSON fields, unknown parts and `.platform`,
@@ -877,6 +889,18 @@ go run .\scripts\windows-live-smoke `
   --workspace 11111111-1111-1111-1111-111111111111 `
   --evidence "$env:TEMP\fabricfs-windows-live-evidence.json"
 ```
+
+To isolate Notebook editor-save behavior, add `--notebook-only`. This creates
+only a uniquely named Folder and Notebook, checks repeated in-place saves
+against fresh remote definitions, verifies temporary-sibling creation is
+rejected, and skips fntk. `--mountpoint M:` selects a specific **unused** drive;
+an existing mount is never replaced by the smoke command. The evidence records
+the exact fixture IDs and deletion checks.
+If Node.js is already installed, `--node-editor-save` also exercises its
+Windows `open('r+')` / `truncate(0)` / `writeFile` / `datasync` / `close`
+sequence used by VS Code's local-file provider and verifies the saved
+marker through a fresh Fabric definition. This is an editor-style filesystem
+test, not a claim of having driven the VS Code UI.
 
 The command records exact, unique test resource names before creating anything.
 It creates an independently owned SDK Notebook fixture for in-place read/update,

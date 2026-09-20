@@ -61,27 +61,35 @@ type evidence struct {
 }
 
 type run struct {
-	ctx         context.Context
-	cancel      context.CancelFunc
-	evidence    *evidence
-	path        string
-	fab         *fabric.Client
-	lake        *onelake.Client
-	backend     *workspacefs.FS
-	server      fusefs.Server
-	logFile     *os.File
-	root        string
-	spool       string
-	mount       string
-	workspaceID string
-	folder      fabric.Folder
-	items       map[string]fabric.Item
+	ctx            context.Context
+	cancel         context.CancelFunc
+	evidence       *evidence
+	path           string
+	fab            *fabric.Client
+	lake           *onelake.Client
+	backend        *workspacefs.FS
+	server         fusefs.Server
+	logFile        *os.File
+	root           string
+	spool          string
+	mount          string
+	workspaceID    string
+	folder         fabric.Folder
+	items          map[string]fabric.Item
+	notebookOnly   bool
+	requestedMount string
+	nodeEditorSave bool
 }
 
 func main() {
-	var workspaceID, evidencePath string
+	var workspaceID, evidencePath, mountpoint string
+	var notebookOnly bool
+	var nodeEditorSave bool
 	flag.StringVar(&workspaceID, "workspace", "", "authorized workspace UUID")
 	flag.StringVar(&evidencePath, "evidence", "", "new JSON evidence file")
+	flag.StringVar(&mountpoint, "mountpoint", "", "optional unused Windows drive, for example M:")
+	flag.BoolVar(&notebookOnly, "notebook-only", false, "create only an owned Folder and Notebook; test editor saves without other items or fntk")
+	flag.BoolVar(&nodeEditorSave, "node-editor-save", false, "also test Node.js open/write/fsync/close using the installed node executable")
 	flag.Parse()
 	if flag.NArg() != 0 || fabric.ValidateID(workspaceID) != nil || evidencePath == "" {
 		fmt.Fprintln(os.Stderr, "usage: windows-live-smoke --workspace UUID --evidence NEW_FILE.json")
@@ -99,6 +107,8 @@ func main() {
 	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Minute)
 	r := &run{
 		ctx: ctx, cancel: cancel, path: path, workspaceID: workspaceID, items: make(map[string]fabric.Item),
+		notebookOnly: notebookOnly, requestedMount: mountpoint,
+		nodeEditorSave: nodeEditorSave,
 		evidence: &evidence{
 			StartedAt: time.Now().UTC(), WorkspaceID: workspaceID,
 			IDs: make(map[string]string), Checks: make(map[string]string),
@@ -153,6 +163,11 @@ func (r *run) execute() error {
 	if err := fusefs.CheckPrerequisites(); err != nil {
 		return err
 	}
+	if r.nodeEditorSave {
+		if _, err := exec.LookPath("node"); err != nil {
+			return fmt.Errorf("Node.js editor-save test requires node on PATH: %w", err)
+		}
+	}
 	var err error
 	r.root, err = os.MkdirTemp("", "fabric-workspace-fs-win-live-")
 	if err != nil {
@@ -162,7 +177,7 @@ func (r *run) execute() error {
 	if err := os.Mkdir(r.spool, 0700); err != nil {
 		return err
 	}
-	r.mount, err = unusedDrive()
+	r.mount, err = selectDrive(r.requestedMount)
 	if err != nil {
 		return err
 	}
@@ -195,7 +210,11 @@ func (r *run) execute() error {
 	if err := r.verifyMounted(); err != nil {
 		return err
 	}
-	r.checkFNTK()
+	if !r.notebookOnly {
+		r.checkFNTK()
+	} else {
+		r.evidence.FNTKHelp = "not-invoked"
+	}
 	return r.save()
 }
 
@@ -266,7 +285,11 @@ func (r *run) createFixtures() error {
 	if err := r.save(); err != nil {
 		return err
 	}
-	for _, kind := range []string{"Notebook", "Lakehouse", "Environment"} {
+	kinds := []string{"Notebook", "Lakehouse", "Environment"}
+	if r.notebookOnly {
+		kinds = []string{"Notebook"}
+	}
+	for _, kind := range kinds {
 		item, err := r.fab.CreateItem(r.ctx, r.workspaceID, kind, r.evidence.Prefix+kind, r.folder.ID)
 		if err != nil {
 			return err
@@ -342,6 +365,9 @@ func (r *run) verifyMounted() error {
 	if err := r.notebookChecks(paths["Notebook"]); err != nil {
 		return err
 	}
+	if r.notebookOnly {
+		return nil
+	}
 	if err := r.lakehouseChecks(paths["Lakehouse"]); err != nil {
 		return err
 	}
@@ -393,7 +419,7 @@ func (r *run) notebookChecks(path string) error {
 		return err
 	}
 	r.record("notebook-warm-read", start)
-	updated := []byte(`{"nbformat":4,"nbformat_minor":5,"cells":[],"metadata":{"fabricWorkspaceFsWindowsE2E":true}}`)
+	updated := ownedNotebookContent("fabricWorkspaceFsWindowsE2E")
 	start = time.Now()
 	file, err := os.OpenFile(content, os.O_WRONLY|os.O_TRUNC, 0644)
 	if err != nil {
@@ -424,10 +450,120 @@ func (r *run) notebookChecks(path string) error {
 		return fmt.Errorf("notebook readback lost the owned marker (saved=%d bytes, read=%d bytes)", len(updated), len(got))
 	}
 	r.evidence.Checks["Notebook"] = fmt.Sprintf("read-write-readback-marker; remoteBytes=%d", len(got))
+	if err := r.verifyRemoteNotebook("fabricWorkspaceFsWindowsE2E"); err != nil {
+		return err
+	}
+	for n := 0; n < 2; n++ {
+		marker := fmt.Sprintf("fabricWorkspaceFsEditorSave%d", n+1)
+		if err := saveNotebookSynced(content, ownedNotebookContent(marker)); err != nil {
+			return fmt.Errorf("editor-style in-place save: %w", err)
+		}
+		if err := r.verifyRemoteNotebook(marker); err != nil {
+			return err
+		}
+	}
+	r.evidence.Checks["EditorSave"] = "two-create-truncate-write-sync-close-saves; each verified by fresh remote definition"
+	finalMarker := "fabricWorkspaceFsEditorSave2"
+	if r.nodeEditorSave {
+		const script = `const fs = require('node:fs/promises');
+(async () => {
+  const file = await fs.open(process.argv[1], 'r+');
+  try { await file.truncate(0); await file.writeFile(process.argv[2], 'utf8'); await file.datasync(); }
+  finally { await file.close(); }
+})().catch(err => { console.error(err.code || 'editor-save-failed'); process.exitCode = 1; });`
+		finalMarker = "fabricWorkspaceFsNodeSave"
+		command := exec.CommandContext(r.ctx, "node", "-e", script, content, string(ownedNotebookContent(finalMarker)))
+		if output, err := command.CombinedOutput(); err != nil {
+			return fmt.Errorf("Node.js in-place editor save: %w: %s", err, output)
+		}
+		if err := r.verifyRemoteNotebook(finalMarker); err != nil {
+			return err
+		}
+		r.evidence.Checks["NodeEditorSave"] = "open-r+-truncate-writeFile-datasync-close; fresh remote definition verified"
+	}
+	if err := expectWriteDenied(filepath.Join(path, ".content.ipynb.tmp")); err != nil {
+		return fmt.Errorf("Notebook atomic-save temporary sibling: %w", err)
+	}
+	r.evidence.Checks["AtomicSave"] = "temporary-sibling-create-rejected; in-place-save-required"
+	if err := r.verifyRemoteNotebook(finalMarker); err != nil {
+		return err
+	}
 	if _, err := os.Stat(filepath.Join(path, ".platform")); !errors.Is(err, fs.ErrNotExist) {
 		return errors.New("hidden .platform unexpectedly exists")
 	}
 	return nil
+}
+
+func (r *run) verifyRemoteNotebook(marker string) error {
+	definition, err := r.fab.GetDefinition(r.ctx, r.workspaceID, r.items["Notebook"].ID, "Notebook", "ipynb")
+	if err != nil {
+		return err
+	}
+	for _, part := range definition.Parts {
+		if !strings.HasSuffix(part.Path, ".ipynb") {
+			continue
+		}
+		data, err := part.Decode()
+		if err != nil {
+			return err
+		}
+		var notebook struct {
+			Metadata map[string]any `json:"metadata"`
+			Cells    []struct {
+				CellType string          `json:"cell_type"`
+				Source   json.RawMessage `json:"source"`
+			} `json:"cells"`
+		}
+		if err := json.Unmarshal(data, &notebook); err != nil {
+			return errors.New("fresh remote notebook definition is not valid notebook JSON")
+		}
+		for _, cell := range notebook.Cells {
+			var text string
+			if json.Unmarshal(cell.Source, &text) != nil {
+				var lines []string
+				if json.Unmarshal(cell.Source, &lines) != nil {
+					continue
+				}
+				text = strings.Join(lines, "")
+			}
+			if cell.CellType == "markdown" && text == marker {
+				r.evidence.Checks["RemoteNotebook"] = "fresh-definition-markdown-cell-marker-verified"
+				return nil
+			}
+		}
+		return fmt.Errorf("fresh remote notebook definition lost the owned cell marker (bytes=%d, cells=%d, metadataFields=%d)", len(data), len(notebook.Cells), len(notebook.Metadata))
+	}
+
+	return errors.New("fresh remote notebook definition has no ipynb part")
+}
+
+func saveNotebookSynced(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(data)
+	var syncErr error
+	if writeErr == nil {
+		syncErr = file.Sync()
+	}
+	return errors.Join(writeErr, syncErr, file.Close())
+}
+
+func ownedNotebookContent(marker string) []byte {
+	value := map[string]any{
+		"nbformat": 4, "nbformat_minor": 5,
+		"metadata": map[string]any{marker: true},
+		"cells": []any{map[string]any{
+			"id": "owned-save-marker", "cell_type": "markdown",
+			"metadata": map[string]any{}, "source": []string{marker},
+		}},
+	}
+	data, err := json.Marshal(value)
+	if err != nil {
+		panic(err)
+	}
+	return data
 }
 
 func (r *run) lakehouseChecks(path string) error {
@@ -623,6 +759,20 @@ func unusedDrive() (string, error) {
 		if _, err := os.Stat(drive + `\`); errors.Is(err, fs.ErrNotExist) {
 			return drive, nil
 		}
+
 	}
 	return "", errors.New("no unused Windows drive letter is available")
+}
+
+func selectDrive(requested string) (string, error) {
+	if requested == "" {
+		return unusedDrive()
+	}
+	if len(requested) != 2 || requested[1] != ':' || requested[0] < 'D' || requested[0] > 'Z' {
+		return "", errors.New("mountpoint must be an unused uppercase drive letter D: through Z:")
+	}
+	if _, err := os.Stat(requested + `\`); !errors.Is(err, fs.ErrNotExist) {
+		return "", errors.New("requested mount drive is already present or inaccessible")
+	}
+	return requested, nil
 }

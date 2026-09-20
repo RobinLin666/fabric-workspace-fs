@@ -25,7 +25,7 @@ def _parser() -> argparse.ArgumentParser:
         "--replace", action="store_true", help="replace existing Fabric kernelspecs"
     )
     kernel = subcommands.add_parser("kernel", help="run a Jupyter kernel process")
-    kernel.add_argument("--connection-file", required=True)
+    kernel.add_argument("-f", "--connection-file", required=True)
     kernel.add_argument("--profile", required=True)
     broker = subcommands.add_parser("broker", help="run owner-local broker in the foreground")
     broker.add_argument("--idle-timeout", type=int, default=900)

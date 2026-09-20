@@ -41,7 +41,7 @@ def install_kernels(*, replace: bool = False) -> list[str]:
                 "-m",
                 "fabric_jupyter",
                 "kernel",
-                "--connection-file",
+                "-f",
                 "{connection_file}",
                 "--profile",
                 profile.name,

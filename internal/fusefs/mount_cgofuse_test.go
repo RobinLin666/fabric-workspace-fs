@@ -285,6 +285,27 @@ func TestWinFspIntegration(t *testing.T) {
 	if got, err := os.ReadFile(notebookPath); err != nil || string(got) != string(updated) {
 		t.Fatalf("WinFsp notebook readback = %q, %v", got, err)
 	}
+	for _, save := range []string{
+		`{"nbformat":4,"cells":[],"metadata":{"save":"a longer editor autosave"}}`,
+		`{"nbformat":4,"cells":[],"metadata":{}}`,
+	} {
+		if err := os.WriteFile(notebookPath, []byte(save), 0644); err != nil {
+			t.Fatalf("WinFsp repeated editor save: %v", err)
+		}
+		if got, err := os.ReadFile(notebookPath); err != nil || string(got) != save {
+			t.Fatalf("WinFsp repeated editor readback = %q, %v", got, err)
+		}
+	}
+	if service.Counts().NotebookUpdates != 3 {
+		t.Fatalf("editor saves did not persist: %+v", service.Counts())
+	}
+	temp := filepath.Join(filepath.Dir(notebookPath), ".content.ipynb.tmp")
+	if err := os.WriteFile(temp, updated, 0644); err == nil {
+		t.Fatal("Notebook atomic-save temporary sibling unexpectedly allowed")
+	}
+	if _, err := os.Stat(temp); !os.IsNotExist(err) {
+		t.Fatalf("rejected temporary sibling remains: %v", err)
+	}
 	_, _, files, _, _ := portablePaths(t)
 	directory := filepath.Join(mountpoint+`\`, filepath.FromSlash(strings.TrimPrefix(files, "/")), "e2e")
 	if err := os.Mkdir(directory, 0755); err != nil {
@@ -302,6 +323,45 @@ func TestWinFspIntegration(t *testing.T) {
 	}
 	if err := os.Remove(directory); err != nil {
 		t.Fatalf("WinFsp Lakehouse rmdir: %v", err)
+	}
+}
+
+func TestWinFspReadOnlyNotebookSave(t *testing.T) {
+	if runtime.GOOS != "windows" || os.Getenv("FABRICFS_WINFSP_TEST") != "1" {
+		t.Skip("set FABRICFS_WINFSP_TEST=1 on Windows with WinFsp installed")
+	}
+	service := testutil.New(t)
+	fab, lake := service.Clients()
+	opts := workspacefs.DefaultOptions()
+	opts.WorkspaceIDs = []string{testutil.WorkspaceID}
+	opts.SpoolDirectory = t.TempDir()
+	opts.ReadOnly = true
+	backend, err := workspacefs.New(fab, lake, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer backend.Close()
+	mountpoint := availableWindowsDrive(t)
+	server, err := Mount(mountpoint, backend, Options{Logger: log.New(io.Discard, "", 0)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() {
+		if err := server.Unmount(); err != nil {
+			t.Error(err)
+		}
+		server.Wait()
+	}()
+	_, notebook, _, _, _ := portablePaths(t)
+	path := filepath.Join(mountpoint+`\`, filepath.FromSlash(strings.TrimPrefix(notebook, "/")), "content.ipynb")
+	if err := os.WriteFile(path, []byte(`{"nbformat":4,"cells":[]}`), 0644); err == nil {
+		t.Fatal("read-only mount accepted a Notebook editor save")
+	}
+	if got, err := os.ReadFile(path); err != nil || string(got) != testutil.InitialNotebook {
+		t.Fatalf("read-only save changed data: %q, %v", got, err)
+	}
+	if service.Counts().NotebookUpdates != 0 {
+		t.Fatal("read-only save reached the remote update endpoint")
 	}
 }
 

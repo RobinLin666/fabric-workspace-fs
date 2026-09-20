@@ -8,7 +8,7 @@ from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
-from .models import FabricLanguage, Profile, redact_mapping
+from .models import FabricLanguage, FabricTarget, Profile, redact_mapping
 from .paths import profiles_path
 
 _MAX_CONFIG_BYTES = 1_048_576
@@ -52,8 +52,26 @@ def load_profiles(path: Path | None = None) -> dict[str, Profile]:
 
 def default_profiles() -> dict[str, Profile]:
     return {
-        "fabric-pyspark": Profile(name="fabric-pyspark", language=FabricLanguage.PYSPARK),
-        "fabric-python": Profile(name="fabric-python", language=FabricLanguage.PYTHON),
+        "fabric-pyspark": Profile(
+            name="fabric-pyspark",
+            language=FabricLanguage.PYSPARK,
+            target=FabricTarget(
+                workspace_id="00000000-0000-0000-0000-000000000001",
+                notebook_id="00000000-0000-0000-0000-000000000101",
+                language=FabricLanguage.PYSPARK,
+                display_name="Local fake Fabric PySpark target",
+            ),
+        ),
+        "fabric-python": Profile(
+            name="fabric-python",
+            language=FabricLanguage.PYTHON,
+            target=FabricTarget(
+                workspace_id="00000000-0000-0000-0000-000000000002",
+                notebook_id="00000000-0000-0000-0000-000000000102",
+                language=FabricLanguage.PYTHON,
+                display_name="Local fake Fabric Python target",
+            ),
+        ),
     }
 
 

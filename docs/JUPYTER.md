@@ -15,9 +15,14 @@ fabric-jupyter install-kernels
 ```
 
 The command installs user-scoped `fabric-pyspark` and `fabric-python`
-kernelspecs. It does not modify a system kernelspec or start a service.
+kernelspecs. It does not modify a system kernelspec or start a service. A new
+install is immediately usable with the default `fake` transport: the kernel
+starts a private per-kernel broker endpoint when no foreground broker is
+running, replies to Jupyter protocol startup messages, and returns deterministic
+fake execution results without contacting Fabric, Spark, fntk, or a mount.
 
-Start the broker in a terminal owned by the same local user:
+For a shared local broker process, or for any non-default transport, start the
+broker in a terminal owned by the same local user:
 
 ```sh
 fabric-jupyter broker
@@ -25,7 +30,9 @@ fabric-jupyter broker
 
 Then select **fabric-jupyter (PySpark)** or **fabric-jupyter (Python)** from a
 Jupyter client. The broker runs in the foreground; stopping it stops local
-kernel-to-broker requests.
+kernel-to-broker requests. If a configured non-fake transport has no broker
+endpoint, the kernel remains alive and reports an explicit execution error
+instead of dying during `kernel_info`.
 
 The distribution and command are both named `fabric-jupyter`. The importable
 Python module remains `fabric_jupyter` because Python package names cannot use
@@ -47,6 +54,10 @@ A target is resolved in this order:
 1. Explicit workspace and Notebook IDs supplied by an embedding client.
 2. The profile's explicit `target`.
 3. A profile's optional `fuseNotebookPath/.fabric.json`.
+
+The generated default profiles include fixed local fake targets so a fresh
+install has no hidden mount or Fabric identity prerequisite. Replace those
+targets only when configuring a reviewed real transport.
 
 The FUSE path is only a convenience identity source. It is optional and is not
 assumed to be mounted. Its `.fabric.json` must identify a `Notebook`; the
