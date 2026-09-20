@@ -133,7 +133,12 @@ jobs:
         run: |
           ruff check .
           mypy src
-      - name: Test mock broker and local Jupyter protocol
+      - name: Test mock broker and local Jupyter protocol on Unix
+        if: runner.os != 'Windows'
+        working-directory: python
+        run: pytest --basetemp=/tmp/fj
+      - name: Test mock broker and local Jupyter protocol on Windows
+        if: runner.os == 'Windows'
         working-directory: python
         run: pytest
       - name: Build package
