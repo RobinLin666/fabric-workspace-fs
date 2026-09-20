@@ -5,6 +5,7 @@ package fusefs
 import (
 	"encoding/base64"
 	"io"
+	"io/fs"
 	"log"
 	"os"
 	"path/filepath"
@@ -12,6 +13,7 @@ import (
 	"strings"
 	"testing"
 
+	"fabric-workspace-fs/internal/fserrors"
 	"fabric-workspace-fs/internal/namespace"
 	"fabric-workspace-fs/internal/testutil"
 	"fabric-workspace-fs/internal/workspacefs"
@@ -64,6 +66,24 @@ func portableNames(t *testing.T, adapter *portableFS, name string) []string {
 		t.Fatalf("readdir %s: %d", name, status)
 	}
 	return names
+}
+
+func TestPortableFailSuppressesUnsupportedOperations(t *testing.T) {
+	adapter := newPortableFS(nil, log.New(io.Discard, "", 0))
+	var buf strings.Builder
+	adapter.logger = log.New(&buf, "", 0)
+	if status := adapter.fail("getattr", fserrors.ErrUnsupported); status != -fuse.ENOTSUP {
+		t.Fatalf("unsupported getattr = %d", status)
+	}
+	if got := buf.String(); got != "" {
+		t.Fatalf("unsupported errors logged: %q", got)
+	}
+	if status := adapter.fail("read", fs.ErrPermission); status != -fuse.EACCES {
+		t.Fatalf("permission read = %d", status)
+	}
+	if got := buf.String(); !strings.Contains(got, "read: permission denied") {
+		t.Fatalf("permission errors not logged: %q", got)
+	}
 }
 
 func TestPortableAdapterNamespaceAndReadOnlyBoundaries(t *testing.T) {

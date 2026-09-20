@@ -90,6 +90,10 @@ def install_kernels(*, replace: bool = False) -> list[str]:
                         "inspect": False,
                         "widgets": False,
                         "richComm": False,
+                        "synapseDataFrameWidgets": (
+                            profile.transport is TransportKind.FABRIC
+                            and profile.language.value == "pyspark"
+                        ),
                     },
                 },
             },

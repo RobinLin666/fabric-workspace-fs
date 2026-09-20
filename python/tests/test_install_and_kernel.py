@@ -287,3 +287,211 @@ def test_kernel_passes_through_display_updates_without_buffering() -> None:
         ] == ["display_data", "update_display_data", "clear_output"]
 
     asyncio.run(run())
+
+
+def test_kernel_adds_standard_mime_fallbacks_for_fabric_outputs() -> None:
+    async def run() -> None:
+        target = FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYSPARK)
+
+        class Client:
+            async def stream_execute(self, **kwargs):
+                assert kwargs["transport"] is TransportKind.FABRIC
+                yield ExecutionEvent(
+                    EventKind.COMM_OPEN,
+                    {
+                        "comm_id": "widget-comm",
+                        "target_name": "synapse:widget",
+                        "data": {
+                            "widget_id": "5e1df07d-5123-44a5-b14b-8b02b4cb09a8",
+                            "widget_type": "Synapse.DataFrame",
+                            "state": {
+                                "table": {
+                                    "schema": [
+                                        {"key": "0", "name": "name", "type": "string"},
+                                        {"key": "1", "name": "count", "type": "long"},
+                                    ],
+                                    "rows": [{"0": "alpha", "1": 3}],
+                                    "truncated": False,
+                                },
+                                "language": "pyspark",
+                            },
+                        },
+                    },
+                )
+                yield ExecutionEvent(
+                    EventKind.DISPLAY_DATA,
+                    {
+                        "data": {
+                            "text/plain": (
+                                "StatementMeta(, d3afa8c9-34e2-459d-9721-d9ffa6d8bcfd, "
+                                "11, Finished, Available, Finished, False)"
+                            )
+                        }
+                    },
+                )
+                yield ExecutionEvent(
+                    EventKind.RESULT,
+                    {
+                        "data": {
+                            "text/plain": (
+                                "SynapseWidget(Synapse.DataFrame, "
+                                "5e1df07d-5123-44a5-b14b-8b02b4cb09a8)"
+                            )
+                        },
+                        "execution_count": 1,
+                        "metadata": {},
+                    },
+                )
+
+        kernel = FabricKernel()
+        kernel._profile = Profile(
+            name="real",
+            language=FabricLanguage.PYSPARK,
+            transport=TransportKind.FABRIC,
+            target=target,
+        )
+        kernel._target = target
+        kernel._connect_profile = AsyncMock(return_value=Client())
+        kernel.send_response = MagicMock()
+        kernel.iopub_socket = object()
+        kernel.execution_count = 1
+        reply = await kernel.do_execute("display", silent=False)
+        assert reply["status"] == "ok"
+
+        display = kernel.send_response.call_args_list[0].args[2]["data"]
+        assert "text/html" in display
+        assert "application/vnd.fabric.statement-meta+json" not in display
+        assert "text/plain" not in display
+        assert "display:none" in display["text/html"]
+        statement_marker = kernel.send_response.call_args_list[0].args[2]["metadata"]["fabric_jupyter"]
+        assert statement_marker["restore_data"]["text/plain"].startswith("StatementMeta(")
+        result = kernel.send_response.call_args_list[1].args[2]["data"]
+        assert "text/html" in result
+        assert "application/vnd.synapse.widget-view+json" not in result
+        marker = kernel.send_response.call_args_list[1].args[2]["metadata"]["fabric_jupyter"]
+        assert marker["restore_data"]["application/vnd.synapse.widget-view+json"] == {
+            "widget_type": "Synapse.DataFrame",
+            "widget_id": "5e1df07d-5123-44a5-b14b-8b02b4cb09a8",
+        }
+        assert set(result) == {"text/html"}
+        assert marker["generated_mime_types"] == ["text/html"]
+        assert "<th>name</th><th>count</th>" in result["text/html"]
+        assert "<td>alpha</td>" in result["text/html"]
+        assert "<td>3</td>" in result["text/html"]
+        assert marker["widget_state"]["sync_state"]["table"]["rows"] == [
+            {"0": "alpha", "1": 3}
+        ]
+
+    asyncio.run(run())
+
+
+def test_kernel_filters_fabric_markers_from_stream_outputs() -> None:
+    async def run() -> None:
+        target = FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYSPARK)
+
+        class Client:
+            async def stream_execute(self, **kwargs):
+                assert kwargs["transport"] is TransportKind.FABRIC
+                yield ExecutionEvent(
+                    EventKind.STREAM,
+                    {
+                        "name": "stdout",
+                        "text": (
+                            "StatementMeta(, f2f725cb-c0f5-43a3-99be-eccd0a26349c, "
+                            "9, Finished, Available, Finished, False)\n"
+                        ),
+                    },
+                )
+                yield ExecutionEvent(
+                    EventKind.STREAM,
+                    {
+                        "name": "stdout",
+                        "text": (
+                            "SynapseWidget(Synapse.DataFrame, "
+                            "c37ea038-d57f-4610-826f-a112f3446c15)\n"
+                        ),
+                    },
+                )
+                yield ExecutionEvent(
+                    EventKind.STREAM,
+                    {"name": "stdout", "text": "[MountPointInfo(mountPoint=/nb_resource)]\n"},
+                )
+
+        kernel = FabricKernel()
+        kernel._profile = Profile(
+            name="real",
+            language=FabricLanguage.PYSPARK,
+            transport=TransportKind.FABRIC,
+            target=target,
+        )
+        kernel._target = target
+        kernel._connect_profile = AsyncMock(return_value=Client())
+        kernel.send_response = MagicMock()
+        kernel.iopub_socket = object()
+        kernel.execution_count = 1
+        reply = await kernel.do_execute("display", silent=False)
+        assert reply["status"] == "ok"
+
+        messages = [(call.args[1], call.args[2]) for call in kernel.send_response.call_args_list]
+        assert [kind for kind, _ in messages] == ["display_data", "stream"]
+        assert "application/vnd.synapse.widget-view+json" not in messages[0][1]["data"]
+        assert "SynapseWidget(" in messages[0][1]["data"]["text/plain"]
+        assert "table preview is unavailable" in messages[0][1]["data"]["text/html"]
+        assert messages[0][1]["metadata"]["fabric_jupyter"]["generated_mime_types"] == ["text/html"]
+        restore = messages[0][1]["metadata"]["fabric_jupyter"]["restore_data"]
+        assert restore["application/vnd.synapse.widget-view+json"] == {
+            "widget_type": "Synapse.DataFrame",
+            "widget_id": "c37ea038-d57f-4610-826f-a112f3446c15",
+        }
+        assert messages[1][1]["text"] == "[MountPointInfo(mountPoint=/nb_resource)]\n"
+
+    asyncio.run(run())
+
+
+def test_kernel_preserves_mount_point_info_result_without_a_second_table() -> None:
+    async def run() -> None:
+        target = FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYSPARK)
+
+        class Client:
+            async def stream_execute(self, **kwargs):
+                assert kwargs["transport"] is TransportKind.FABRIC
+                yield ExecutionEvent(
+                    EventKind.RESULT,
+                    {
+                        "data": {
+                            "text/plain": (
+                                "[MountPointInfo(mountPoint=/nb_resource/builtin, "
+                                "source=Notebook Working Directory, scope=nb_resource, "
+                                "localPath=/synfs/notebook/builtin)]"
+                            )
+                        },
+                        "execution_count": 1,
+                        "metadata": {},
+                    },
+                )
+
+        kernel = FabricKernel()
+        kernel._profile = Profile(
+            name="real",
+            language=FabricLanguage.PYSPARK,
+            transport=TransportKind.FABRIC,
+            target=target,
+        )
+        kernel._target = target
+        kernel._connect_profile = AsyncMock(return_value=Client())
+        kernel.send_response = MagicMock()
+        kernel.iopub_socket = object()
+        kernel.execution_count = 1
+        reply = await kernel.do_execute("notebookutils.fs.mounts()", silent=False)
+        assert reply["status"] == "ok"
+
+        result = kernel.send_response.call_args.args[2]["data"]
+        assert result == {
+            "text/plain": (
+                "[MountPointInfo(mountPoint=/nb_resource/builtin, "
+                "source=Notebook Working Directory, scope=nb_resource, "
+                "localPath=/synfs/notebook/builtin)]"
+            )
+        }
+
+    asyncio.run(run())

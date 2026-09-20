@@ -33,6 +33,9 @@ class EventKind(StrEnum):
     DISPLAY_DATA = "display_data"
     UPDATE_DISPLAY_DATA = "update_display_data"
     CLEAR_OUTPUT = "clear_output"
+    COMM_OPEN = "comm_open"
+    COMM_MSG = "comm_msg"
+    COMM_CLOSE = "comm_close"
     ERROR = "error"
     STATUS = "status"
 

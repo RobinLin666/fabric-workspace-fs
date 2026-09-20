@@ -371,6 +371,8 @@ class NotebookRuntimeTransport(FabricTransport):
                             yield ExecutionEvent(EventKind.ERROR, content)
                         elif kind in ("display_data", "update_display_data", "clear_output"):
                             yield ExecutionEvent(EventKind(kind), content)
+                        elif kind in ("comm_open", "comm_msg", "comm_close"):
+                            yield ExecutionEvent(EventKind(kind), content)
                         elif kind == "input_request":
                             raise RuntimeFailure("runtime requested unsupported interactive input")
             except (TimeoutError, asyncio.CancelledError) as exc:

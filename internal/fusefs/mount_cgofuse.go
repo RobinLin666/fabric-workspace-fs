@@ -303,7 +303,7 @@ func (f *portableFS) fail(operation string, err error) int {
 		return 0
 	}
 	code := portableErrno(err)
-	if code != fuse.ENOENT {
+	if code != fuse.ENOENT && code != fuse.ENOTSUP {
 		f.logger.Printf("%s: %v", operation, err)
 	}
 	return -code

@@ -166,6 +166,137 @@ func validNotebook(data []byte) error {
 	return nil
 }
 
+func prepareNotebookForFabric(data []byte) ([]byte, error) {
+	var notebook map[string]any
+	if err := json.Unmarshal(data, &notebook); err != nil {
+		return nil, err
+	}
+	cells, ok := notebook["cells"].([]any)
+	if !ok {
+		return data, nil
+	}
+	referenced := make(map[string]bool)
+	states := make(map[string]any)
+	touched := false
+	widgetTouched := false
+	for _, rawCell := range cells {
+		cell, ok := rawCell.(map[string]any)
+		if !ok {
+			continue
+		}
+		outputs, ok := cell["outputs"].([]any)
+		if !ok {
+			continue
+		}
+		for _, rawOutput := range outputs {
+			output, ok := rawOutput.(map[string]any)
+			if !ok {
+				continue
+			}
+			outputData, ok := output["data"].(map[string]any)
+			if !ok {
+				continue
+			}
+			outputMetadata, ok := output["metadata"].(map[string]any)
+			if !ok {
+				continue
+			}
+			marker, ok := outputMetadata["fabric_jupyter"].(map[string]any)
+			if !ok {
+				continue
+			}
+			touched = true
+			if generated, ok := marker["generated_mime_types"].([]any); ok {
+				for _, rawMIME := range generated {
+					if mime, ok := rawMIME.(string); ok {
+						delete(outputData, mime)
+					}
+				}
+			}
+			if restoreData, ok := marker["restore_data"].(map[string]any); ok {
+				for mime, value := range restoreData {
+					outputData[mime] = value
+				}
+			}
+			delete(outputMetadata, "fabric_jupyter")
+			widget, ok := outputData["application/vnd.synapse.widget-view+json"].(map[string]any)
+			if !ok {
+				continue
+			}
+			widgetID, ok := widget["widget_id"].(string)
+			if !ok || widgetID == "" {
+				continue
+			}
+			widgetTouched = true
+			referenced[widgetID] = true
+			if state, ok := marker["widget_state"].(map[string]any); ok {
+				states[widgetID] = state
+			}
+		}
+	}
+	if !touched {
+		return data, nil
+	}
+	if !widgetTouched {
+		normalized, err := json.Marshal(notebook)
+		if err != nil {
+			return nil, err
+		}
+		return normalized, nil
+	}
+	metadata, ok := notebook["metadata"].(map[string]any)
+	if !ok {
+		metadata = make(map[string]any)
+		notebook["metadata"] = metadata
+	}
+	synapse, ok := metadata["synapse_widget"].(map[string]any)
+	if !ok {
+		synapse = make(map[string]any)
+	}
+	existingStates, ok := synapse["state"].(map[string]any)
+	if !ok {
+		existingStates = make(map[string]any)
+	}
+	for id, state := range states {
+		if existing, ok := existingStates[id].(map[string]any); ok {
+			if incoming, ok := state.(map[string]any); ok {
+				state = mergeNotebookMetadata(existing, incoming)
+			}
+		}
+		existingStates[id] = state
+	}
+	for id := range existingStates {
+		if !referenced[id] {
+			delete(existingStates, id)
+		}
+	}
+	synapse["version"] = "0.1"
+	synapse["state"] = existingStates
+	metadata["synapse_widget"] = synapse
+	normalized, err := json.Marshal(notebook)
+	if err != nil {
+		return nil, err
+	}
+	return normalized, nil
+}
+
+func mergeNotebookMetadata(existing, incoming map[string]any) map[string]any {
+	merged := make(map[string]any, len(existing)+len(incoming))
+	for key, value := range existing {
+		merged[key] = value
+	}
+	for key, value := range incoming {
+		if current, ok := merged[key].(map[string]any); ok {
+			if next, ok := value.(map[string]any); ok {
+				merged[key] = mergeNotebookMetadata(current, next)
+				continue
+			}
+		}
+		merged[key] = value
+	}
+	return merged
+}
+
 func (s *FS) notebookCommit(e Entry, snapshot *definitionSnapshot, partPath string) func(context.Context, io.ReaderAt, int64) error {
 	base := snapshot.definition
 	before, baseErr := s.snapshotDigest(snapshot)
@@ -190,6 +321,13 @@ func (s *FS) notebookCommit(e Entry, snapshot *definitionSnapshot, partPath stri
 			if _, err := reader.ReadAt(data, 0); err != nil {
 				return err
 			}
+		}
+		data, err := prepareNotebookForFabric(data)
+		if err != nil {
+			return fmt.Errorf("prepare notebook for Fabric: %w", errors.Join(fs.ErrInvalid, err))
+		}
+		if int64(len(data)) > s.opts.MaxNotebookSize {
+			return fserrors.ErrTooLarge
 		}
 		if err := validNotebook(data); err != nil {
 			return err

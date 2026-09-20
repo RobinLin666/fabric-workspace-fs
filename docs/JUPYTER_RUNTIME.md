@@ -81,10 +81,55 @@ substitute for orderly shutdown.
   remain outside the single-user isolation boundary.
 - The runtime may maintain remote execution history. The local adapter does not
   persist code history, runtime session identifiers, outputs, or tokens.
-- Rich comms/widgets, binary buffers, completion, inspection, debugging,
-  interactive stdin, custom environment/Lakehouse attachment, high-concurrency
-  session sharing, and notebook-reference artifact serving are not supported.
-  No client-side code evaluation or fake fallback is used by a `fabric` profile.
+- Synapse DataFrame widget state received through `synapse:widget` comm-open
+  messages is rendered as a static standard HTML table for Jupyter clients,
+  without a client plugin. Generated Data Resource MIME is deliberately omitted:
+  VS Code can prefer its Data Resource renderer over HTML and show a blank output.
+  Missing widget state produces an explicit unavailable-preview message.
+  The original `application/vnd.synapse.widget-view+json` output is retained in
+  output metadata under `fabric_jupyter.restore_data` during local rendering.
+  The workspace filesystem restores it and removes locally generated HTML during Notebook save
+  while `metadata.synapse_widget.state` is updated for Fabric portal
+  compatibility. Reopening the native saved output in a client without a Fabric
+  renderer requires rerunning the cell to regenerate its HTML preview.
+- Notebook `run`/`runMultiple` results with MIME
+  `application/vnd.synapse.mssparkutilsrunmultiple-result+json` are rendered as
+  standard HTML activity tables (status, progress, duration, exit value and error).
+  Each incoming `update_display_data` regenerates the table with the same
+  `transient.display_id`, so clients update the existing output while execution is
+  running; no JavaScript or renderer extension is required. Durations use the
+  backend's millisecond values and update only when a new result arrives.
+  Only the activity table is displayed. On snapshot success, the notebook name
+  links to the public-cloud Portal snapshot using `workspace_id`,
+  `root_artifact_id` (the parent notebook, not the child `artifact_id`) and `run_id`:
+  `https://app.powerbi.com/groups/{workspace_id}/synapsenotebooks/{root_artifact_id}/snapshots/{run_id}?experience=power-bi`.
+  Pending/failed snapshots or missing identifiers remain plain text.
+  The original payload is retained in `fabric_jupyter.restore_data` and restored
+  by the workspace filesystem on save, just like the DataFrame output. This is
+  not the Portal's interactive DAG viewer.
+- Inline `application/vnd.synapse-jupyter.display-view+json` tables and
+  `application/vnd.synapse.sparksql-result+json` results also render as standard
+  HTML without a client extension. The former uses `table.schema/rows`; the latter
+  uses `schema.fields/data`, supporting row arrays and numeric-key objects.
+  Column order, null/short rows, nested JSON values and truncated-preview notices
+  are handled by the shared DataFrame table renderer. Malformed payloads produce
+  a visible diagnostic instead of silently dropping data. Native MIME, unrelated
+  metadata and existing backend HTML are preserved; generated HTML is removed
+  on workspace-filesystem save. Standard display-ID updates apply to both formats.
+  Livy and Jupyter statement-meta MIME bundles are hidden locally and restored
+  on save, even without a recognized `StatementMeta(...)` text representation.
+- This covers the four custom MIME renderer families actually implemented by
+  the Trident desktop/remote renderer, at the portable table level. It does not
+  reproduce interactive chart editing, Azure Maps, Data Wrangler, or chart-view
+  persistence. Existing chart/view metadata is left untouched. Registered-only
+  `application/vnd.synapse.mssparkutilsrun-result+json`, MLflow run widgets and
+  `text/vnd.synapse.lsmagic-result` have no verified renderer contract here and
+  remain unchanged, not advertised as supported.
+- General rich comms/widgets, binary buffers, completion, inspection,
+  debugging, interactive stdin, custom environment/Lakehouse attachment,
+  high-concurrency session sharing, and notebook-reference artifact serving
+  are not supported. No client-side code evaluation or fake fallback is used
+  by a `fabric` profile.
 
 The documented [Fabric Livy API](https://learn.microsoft.com/fabric/data-engineering/api-livy-overview)
 is Lakehouse-scoped and is a different integration. Notebook definition APIs
@@ -97,6 +142,13 @@ another client's implementation.
 Offline tests cover credential audiences, target isolation, origin/redirect
 rejection, secret-safe errors, frame parsing, reply/idle correlation, local IPC,
 and genuine local Jupyter clients. They never contact Fabric.
+
+Portable-output tests cover all four table families, HTML escaping, malformed
+payload diagnostics, display-ID updates, and native-MIME restoration on save.
+Inline Jupyter-display and Spark-SQL acceptance in VS Code uses explicitly
+constructed protocol samples sent through a real Fabric kernel; these are not
+captured native-producer fixtures. The SQL sample can use a read-only Spark
+`SELECT` for its rows. Keep such acceptance notebooks separate from user notebooks.
 
 Real validation requires separate explicit authorization and a disposable
 owned Notebook. Verify remote readiness, a harmless print/arithmetic result,

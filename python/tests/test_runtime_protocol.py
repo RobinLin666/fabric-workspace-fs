@@ -55,14 +55,39 @@ def test_execute_streams_and_waits_for_both_reply_and_idle():
                 assert request["content"]["store_history"] is True
                 assert request["content"]["allow_stdin"] is False
                 queue = runtime._pending[request["header"]["msg_id"]]
+                queue.put_nowait(frame("comm_open", {
+                    "comm_id": "widget",
+                    "target_name": "synapse:widget",
+                    "data": {
+                        "widget_id": "33333333-3333-3333-3333-333333333333",
+                        "widget_type": "Synapse.DataFrame",
+                        "state": {"table": {"schema": [], "rows": [], "truncated": False}},
+                    },
+                }))
                 queue.put_nowait(frame("stream", {"name": "stdout", "text": "marker\n"}))
+                for kind, status in (("display_data", "running"), ("update_display_data", "success")):
+                    queue.put_nowait(frame(kind, {
+                        "data": {"application/vnd.synapse.mssparkutilsrunmultiple-result+json": {
+                            "activities": [{"notebook_name": "child", "status": status}],
+                        }},
+                        "transient": {"display_id": "run-progress"},
+                    }))
                 queue.put_nowait(frame("execute_reply", {"status": "ok"}))
                 queue.put_nowait(frame("execute_result", {"data": {"text/plain": "42"}}))
                 queue.put_nowait(frame("status", {"execution_state": "idle"}))
 
         runtime._ws = Socket()
         events = [event async for event in runtime.execute(ExecutionRequest("test", TARGET, "6 * 7"))]
-        assert [event.kind for event in events] == [EventKind.STREAM, EventKind.RESULT]
+        assert [event.kind for event in events] == [
+            EventKind.COMM_OPEN,
+            EventKind.STREAM,
+            EventKind.DISPLAY_DATA,
+            EventKind.UPDATE_DISPLAY_DATA,
+            EventKind.RESULT,
+        ]
+        assert events[2].content["transient"] == events[3].content["transient"] == {
+            "display_id": "run-progress",
+        }
         assert not runtime._pending
         await runtime._access.close()
 
