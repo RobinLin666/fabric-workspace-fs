@@ -212,6 +212,31 @@ func TestNotebookFailedFlushRetryAndConflictRecovery(t *testing.T) {
 	}
 }
 
+func TestNotebookSaveComparisonDoesNotDecodeFreshDefinition(t *testing.T) {
+	backend, remote := newTestFS(t, nil)
+	_, e := notebook(t, backend)
+	handle, err := backend.Open(context.Background(), e, os.O_RDWR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer handle.Close()
+
+	before := backend.SnapshotStats()
+	reads := remote.Counts().DefinitionReads
+	save(t, handle, `{"nbformat":4,"cells":[],"metadata":{"saved":true}}`)
+	after := backend.SnapshotStats()
+
+	if remote.Counts().DefinitionReads != reads+1 {
+		t.Fatal("save did not force a fresh definition comparison")
+	}
+	if after.Decodes != before.Decodes {
+		t.Fatalf("save comparison decoded a definition: before=%+v after=%+v", before, after)
+	}
+	if remote.Counts().NotebookUpdates != 1 {
+		t.Fatal("save did not update the notebook")
+	}
+}
+
 func TestInvalidNotebookIsVisibleAndCanBeCorrected(t *testing.T) {
 	backend, _ := newTestFS(t, nil)
 	_, e := notebook(t, backend)

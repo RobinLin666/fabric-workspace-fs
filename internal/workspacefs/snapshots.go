@@ -45,25 +45,42 @@ func (s *FS) sourceSnapshot(ctx context.Context, e Entry, maxAge time.Duration, 
 		maxAge = 0
 	}
 	return s.snapshots.GetWithin(ctx, key, min(maxAge, policy.Definition), policy.Definition, func(ctx context.Context) (*definitionSnapshot, error) {
-		select {
-		case s.snapshotSlots <- struct{}{}:
-			defer func() { <-s.snapshotSlots }()
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		}
-		format := ""
-		if e.Item.Type == "Notebook" {
-			format = "ipynb"
-		}
-		def, err := s.fabric.FabricAPI.GetDefinition(ctx, e.Workspace, e.Item.ID, e.Item.Type, format)
+		def, err := s.fetchDefinition(ctx, e)
 		if err != nil {
 			return nil, err
 		}
-		if format != "" {
-			def.Format = format
-		}
 		return s.makeSnapshot(def, e.Item.Type, s.now())
 	})
+}
+
+// fetchDefinition obtains one source generation without decoding its parts. Save
+// conflict detection hashes the full wire definition, so decoding the current
+// notebook body would add CPU and allocations without affecting that comparison.
+func (s *FS) fetchDefinition(ctx context.Context, e Entry) (fabric.Definition, error) {
+	if e.Item.Type != "Notebook" && e.Item.Type != "Environment" {
+		return fabric.Definition{}, fs.ErrInvalid
+	}
+	select {
+	case s.snapshotSlots <- struct{}{}:
+		defer func() { <-s.snapshotSlots }()
+	case <-ctx.Done():
+		return fabric.Definition{}, ctx.Err()
+	}
+	format := ""
+	if e.Item.Type == "Notebook" {
+		format = "ipynb"
+	}
+	def, err := s.fabric.FabricAPI.GetDefinition(ctx, e.Workspace, e.Item.ID, e.Item.Type, format)
+	if err != nil {
+		return fabric.Definition{}, err
+	}
+	if format != "" {
+		def.Format = format
+	}
+	if definitionSize(def)+256 > max(int64(128<<20), 3*s.opts.MaxNotebookSize) {
+		return fabric.Definition{}, fmt.Errorf("definition snapshot exceeds its byte budget: %w", fserrors.ErrTooLarge)
+	}
+	return def, nil
 }
 
 func (s *FS) makeSnapshot(def fabric.Definition, kind string, observed time.Time) (*definitionSnapshot, error) {

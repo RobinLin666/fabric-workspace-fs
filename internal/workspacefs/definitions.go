@@ -208,11 +208,11 @@ func (s *FS) notebookCommit(e Entry, snapshot *definitionSnapshot, partPath stri
 		if !found {
 			return fmt.Errorf("notebook content part disappeared: %w", fserrors.ErrConflict)
 		}
-		current, err := s.sourceSnapshot(ctx, e, 0, true)
+		current, err := s.fetchDefinition(ctx, e)
 		if err != nil {
 			return err
 		}
-		actual, err := s.snapshotDigest(current)
+		actual, err := digest(current)
 		if err != nil {
 			return err
 		}
@@ -223,7 +223,7 @@ func (s *FS) notebookCommit(e Entry, snapshot *definitionSnapshot, partPath stri
 		if actual == after {
 			// Reconcile a previous ambiguous response only with an exact full
 			// definition match; never discard a different external edit.
-			base, before = current.definition, actual
+			base, before = current, actual
 			return nil
 		}
 		if actual != before {
