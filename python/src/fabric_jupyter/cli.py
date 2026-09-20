@@ -85,10 +85,16 @@ async def _serve_broker(idle_timeout: int, profile_name: str) -> int:
 
 
 async def _broker_status(endpoint: Path | None) -> int:
-    sessions = await BrokerClient(load_endpoint(endpoint)).status()
+    try:
+        broker_endpoint = load_endpoint(endpoint)
+    except FileNotFoundError:
+        print(json.dumps({"status": "not-running", "sessions": []}, sort_keys=True))
+        return 0
+    sessions = await BrokerClient(broker_endpoint).status()
     print(
         json.dumps(
-            {"sessions": [redact_mapping(item) for item in sessions]}, indent=2, sort_keys=True
+            {"status": "running", "sessions": [redact_mapping(item) for item in sessions]},
+            indent=2, sort_keys=True,
         )
     )
     return 0

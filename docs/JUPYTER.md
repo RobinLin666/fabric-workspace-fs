@@ -71,6 +71,15 @@ fabric-jupyter profile show
 fabric-jupyter broker-status
 ```
 
+`profile show` prints the credential-redacted effective profiles; use
+`fabric-jupyter profile show --config <path>` to inspect a specific config.
+`broker-status` inspects the foreground broker, not private embedded kernel
+brokers. A missing endpoint returns `{"status":"not-running","sessions":[]}`
+with exit code 0; a reachable broker returns `"status":"running"` and its
+sessions, also with exit code 0. Invalid or insecure endpoint files, permission
+errors, and unreachable/stale endpoints remain errors (exit code 2 and a
+diagnostic on stderr), rather than being reported as healthy or absent.
+
 A target is resolved in this order:
 
 1. Explicit workspace and Notebook IDs supplied to the library resolver.

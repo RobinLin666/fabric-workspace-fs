@@ -200,12 +200,13 @@ kernel32.GetDriveTypeW.restype = wintypes.UINT
 
 def _raise_last_error(message: str) -> None:
     error = _get_last_error()
-    raise OSError(error, f"{message}: {_format_error(error)}")
+    # Win32 codes are not POSIX errno values (notably PATH_NOT_FOUND and ACCESS_DENIED).
+    raise OSError(0, f"{message}: {_format_error(error)}", None, error)
 
 
 def _check_win32_error(code: int, message: str) -> None:
     if code:
-        raise OSError(code, f"{message}: {_format_error(code)}")
+        raise OSError(0, f"{message}: {_format_error(code)}", None, code)
 
 
 def _get_last_error() -> int:
