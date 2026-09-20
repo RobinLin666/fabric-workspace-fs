@@ -137,6 +137,12 @@ advapi32.GetSecurityDescriptorDacl.argtypes = [
     ctypes.POINTER(wintypes.BOOL),
 ]
 advapi32.GetSecurityDescriptorDacl.restype = wintypes.BOOL
+advapi32.GetSecurityDescriptorOwner.argtypes = [
+    wintypes.LPVOID,
+    ctypes.POINTER(wintypes.LPVOID),
+    ctypes.POINTER(wintypes.BOOL),
+]
+advapi32.GetSecurityDescriptorOwner.restype = wintypes.BOOL
 advapi32.GetNamedSecurityInfoW.argtypes = [
     wintypes.LPWSTR,
     wintypes.DWORD,
@@ -270,6 +276,8 @@ def _set_dacl_from_sddl(path: Path, sddl: str) -> None:
     dacl_present = wintypes.BOOL()
     dacl_defaulted = wintypes.BOOL()
     dacl = wintypes.LPVOID()
+    owner_defaulted = wintypes.BOOL()
+    owner = wintypes.LPVOID()
     try:
         if not advapi32.GetSecurityDescriptorDacl(
             security_descriptor,
@@ -280,12 +288,21 @@ def _set_dacl_from_sddl(path: Path, sddl: str) -> None:
             _raise_last_error("GetSecurityDescriptorDacl failed")
         if not dacl_present or not dacl:
             raise PermissionError(f"{path} security descriptor does not contain a DACL")
+        if not advapi32.GetSecurityDescriptorOwner(
+            security_descriptor,
+            ctypes.byref(owner),
+            ctypes.byref(owner_defaulted),
+        ):
+            _raise_last_error("GetSecurityDescriptorOwner failed")
+        security_information = DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION
+        if owner:
+            security_information |= OWNER_SECURITY_INFORMATION
         _check_win32_error(
             advapi32.SetNamedSecurityInfoW(
                 str(path),
                 SE_FILE_OBJECT,
-                DACL_SECURITY_INFORMATION | PROTECTED_DACL_SECURITY_INFORMATION,
-                None,
+                security_information,
+                owner,
                 None,
                 dacl,
                 None,
@@ -304,7 +321,7 @@ def owner_only_sddl() -> str:
 
 
 def set_owner_only_dacl(path: Path) -> None:
-    """Replace an existing filesystem object's DACL with current-user-only full access."""
+    """Make an existing filesystem object current-user-owned with exclusive access."""
 
     _set_dacl_from_sddl(path, owner_only_sddl())
     validate_owner_only_dacl(path)
@@ -327,7 +344,7 @@ def create_owner_only_directory(path: Path) -> None:
             raise OSError(error, f"CreateDirectoryW failed for {path}: {_format_error(error)}")
     finally:
         kernel32.LocalFree(security_descriptor)
-    validate_owner_only_dacl(path)
+    set_owner_only_dacl(path)
 
 
 def create_owner_only_file_handle(path: Path) -> int:
@@ -356,7 +373,7 @@ def create_owner_only_file_handle(path: Path) -> int:
                 raise FileExistsError(error, f"{path} already exists", str(path))
             _raise_last_error(f"CreateFileW failed for {path}")
         try:
-            validate_owner_only_dacl(path)
+            set_owner_only_dacl(path)
         except Exception:
             kernel32.CloseHandle(handle)
             raise

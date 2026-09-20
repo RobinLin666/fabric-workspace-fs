@@ -152,6 +152,7 @@ def test_windows_broker_endpoint_rejects_shared_acl(local_state: Path) -> None:
 
     endpoint = ensure_private(state_dir()) / "broker.json"
     endpoint.write_text("{}", encoding="utf-8")
+    protect_private_file(endpoint)
     _win_acl._set_dacl_from_sddl(
         endpoint,
         f"D:P(A;;FA;;;{_win_acl.current_user_sid_string()})(A;;FA;;;WD)",
@@ -170,6 +171,7 @@ def test_windows_broker_endpoint_rejects_restricted_owner_acl(local_state: Path)
 
     endpoint = ensure_private(state_dir()) / "broker.json"
     endpoint.write_text("{}", encoding="utf-8")
+    protect_private_file(endpoint)
     _win_acl._set_dacl_from_sddl(
         endpoint,
         f"D:P(A;;FR;;;{_win_acl.current_user_sid_string()})",
