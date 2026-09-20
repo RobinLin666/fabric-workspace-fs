@@ -50,15 +50,7 @@ func Mount(mountpoint string, backend *workspacefs.FS, opts Options) (Server, er
 		host: host, adapter: adapter, ready: adapter.ready, done: make(chan struct{}),
 		timeout: 10 * time.Second,
 	}
-	mountOptions := []string{"-o", "fsname=fabric-workspace-fs", "-o", "attr_timeout=0,entry_timeout=0,negative_timeout=0"}
-	if runtime.GOOS == "windows" {
-		// WinFsp maps POSIX ownership to Windows security. Mapping both owner
-		// and group to the mounting user keeps writable directories accessible.
-		mountOptions = append(mountOptions, "-o", "uid=-1,gid=-1,FileInfoTimeout=0")
-	}
-	if opts.ReadOnly {
-		mountOptions = append(mountOptions, "-o", "ro")
-	}
+	mountOptions := portableMountOptions(mountpoint, opts)
 	go server.serve(mountpoint, mountOptions)
 	if err := server.WaitMount(); err != nil {
 		select {
@@ -72,6 +64,25 @@ func Mount(mountpoint string, backend *workspacefs.FS, opts Options) (Server, er
 		return failedMount(server, mountpoint, err)
 	}
 	return server, nil
+}
+
+func portableMountOptions(mountpoint string, opts Options) []string {
+	options := []string{"-o", "fsname=fabric-workspace-fs", "-o", "attr_timeout=0,entry_timeout=0,negative_timeout=0"}
+	if runtime.GOOS == "windows" {
+		// A WinFsp drive created only through DefineDosDevice is invisible to
+		// GetFinalPathNameByHandleW. A UNC prefix makes it a network drive, so
+		// native realpath callers can resolve handles without requiring elevation.
+		if len(mountpoint) == 2 && mountpoint[1] == ':' {
+			options = append(options, `--VolumePrefix=\fabricfs\`+strings.ToUpper(mountpoint[:1]))
+		}
+		// WinFsp maps POSIX ownership to Windows security. Mapping both owner
+		// and group to the mounting user keeps writable directories accessible.
+		options = append(options, "-o", "uid=-1,gid=-1,FileInfoTimeout=0")
+	}
+	if opts.ReadOnly {
+		options = append(options, "-o", "ro")
+	}
+	return options
 }
 
 func waitPortableMountVisible(server *portableServer, mountpoint string) error {

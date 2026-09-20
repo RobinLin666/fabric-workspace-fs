@@ -4,12 +4,15 @@ package fusefs
 
 import (
 	"encoding/base64"
+	"errors"
 	"io"
 	"io/fs"
 	"log"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
+	"slices"
 	"strings"
 	"testing"
 
@@ -118,6 +121,19 @@ func TestWindowsDriveMountpointNormalization(t *testing.T) {
 	got, err := NormalizeMountpoint("m:")
 	if err != nil || got != "M:" {
 		t.Fatalf("NormalizeMountpoint = %q, %v", got, err)
+	}
+}
+
+func TestWindowsDriveMountUsesNetworkVolumePrefix(t *testing.T) {
+	if runtime.GOOS != "windows" {
+		t.Skip("Windows mount options")
+	}
+	options := portableMountOptions("m:", Options{ReadOnly: true})
+	if !slices.Contains(options, `--VolumePrefix=\fabricfs\M`) {
+		t.Fatalf("mount options do not enable native Windows path resolution: %q", options)
+	}
+	if !slices.Contains(options, "ro") {
+		t.Fatalf("read-only option missing: %q", options)
 	}
 }
 
@@ -298,8 +314,11 @@ func TestWinFspIntegration(t *testing.T) {
 	}
 	_, notebook, _, _, _ := portablePaths(t)
 	notebookPath := filepath.Join(mountpoint+`\`, filepath.FromSlash(strings.TrimPrefix(notebook, "/")), "content.ipynb")
+	t.Run("node native realpath", func(t *testing.T) {
+		assertNodeNativeRealpath(t, mountpoint, filepath.Join(mountpoint+`\`, workspace), notebookPath)
+	})
 	updated := []byte(`{"nbformat":4,"nbformat_minor":5,"cells":[],"metadata":{"winfsp":true}}`)
-	if err := os.WriteFile(notebookPath, updated, 0644); err != nil {
+	if err := writeFileSynced(notebookPath, updated); err != nil {
 		t.Fatalf("WinFsp notebook save: %v", err)
 	}
 	if got, err := os.ReadFile(notebookPath); err != nil || string(got) != string(updated) {
@@ -309,7 +328,7 @@ func TestWinFspIntegration(t *testing.T) {
 		`{"nbformat":4,"cells":[],"metadata":{"save":"a longer editor autosave"}}`,
 		`{"nbformat":4,"cells":[],"metadata":{}}`,
 	} {
-		if err := os.WriteFile(notebookPath, []byte(save), 0644); err != nil {
+		if err := writeFileSynced(notebookPath, []byte(save)); err != nil {
 			t.Fatalf("WinFsp repeated editor save: %v", err)
 		}
 		if got, err := os.ReadFile(notebookPath); err != nil || string(got) != save {
@@ -343,6 +362,67 @@ func TestWinFspIntegration(t *testing.T) {
 	}
 	if err := os.Remove(directory); err != nil {
 		t.Fatalf("WinFsp Lakehouse rmdir: %v", err)
+	}
+}
+
+func writeFileSynced(path string, data []byte) error {
+	file, err := os.OpenFile(path, os.O_WRONLY|os.O_TRUNC, 0644)
+	if err != nil {
+		return err
+	}
+	_, writeErr := file.Write(data)
+	var syncErr error
+	if writeErr == nil {
+		syncErr = file.Sync()
+	}
+	return errors.Join(writeErr, syncErr, file.Close())
+}
+
+func assertNodeNativeRealpath(t *testing.T, paths ...string) {
+	t.Helper()
+	node, err := exec.LookPath("node")
+	if err != nil {
+		t.Skip("Node.js is required for the native realpath integration check")
+	}
+	const script = `
+const fs = require('node:fs');
+const paths = process.argv.slice(1);
+(async () => {
+  for (const path of paths) {
+    fs.realpathSync(path);
+    const sync = fs.realpathSync.native(path);
+    const async = await new Promise((resolve, reject) =>
+      fs.realpath.native(path, (error, result) => error ? reject(error) : resolve(result)));
+    if (sync !== async || !sync.startsWith('\\\\fabricfs\\')) {
+      throw new Error('unexpected native realpath for ' + path + ': ' + sync + ' / ' + async);
+    }
+  }
+  if (fs.readdirSync(paths[0]).length === 0 || fs.readdirSync(paths[1]).length === 0) {
+    throw new Error('mounted directories unexpectedly empty');
+  }
+  if (fs.readFileSync(paths[2], 'utf8').length === 0) {
+    throw new Error('mounted file unexpectedly empty');
+  }
+  const missing = paths[0] + '\\missing-native-realpath-entry';
+  for (const operation of [
+    () => fs.realpathSync.native(missing),
+    () => new Promise((resolve, reject) =>
+      fs.realpath.native(missing, error => error ? reject(error) : resolve()))
+  ]) {
+    try {
+      await operation();
+      throw new Error('missing path unexpectedly resolved: ' + missing);
+    } catch (error) {
+      if (error.code !== 'ENOENT') throw error;
+    }
+  }
+})().catch(error => {
+  console.error(error);
+  process.exitCode = 1;
+});`
+	args := append([]string{"-e", script}, paths...)
+	if output, err := exec.Command(node, args...).CombinedOutput(); err != nil {
+		t.Fatalf("Node.js native realpath compatibility: %v\n%s", err, output)
 	}
 }
 

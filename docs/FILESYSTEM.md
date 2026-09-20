@@ -12,7 +12,7 @@ Use Go **1.26 or later**. Install the native filesystem runtime separately:
 | Platform | Runtime and build boundary | Validation |
 |---|---|---|
 | Linux | FUSE 3 (`/dev/fuse` and `fusermount3`, normally the `fuse3` package). Normal builds do not need CGO. | Unit/race tests and real kernel mounts against offline HTTP mocks. |
-| Windows | [WinFsp 2.1](https://github.com/winfsp/winfsp/releases/tag/v2.1). The normal `CGO_ENABLED=0` binary dynamically loads the installed WinFsp runtime. Use an unused drive such as `M:` or an existing empty directory. | Native callback tests on every Windows build; CI installs WinFsp and performs a real mount. A WinFsp 2.1 mount was also validated end-to-end against owned Fabric fixtures. |
+| Windows | [WinFsp 2.1](https://github.com/winfsp/winfsp/releases/tag/v2.1). The normal `CGO_ENABLED=0` binary dynamically loads the installed WinFsp runtime. Use an unused drive such as `M:` or an existing empty directory. Drive-letter mounts use a WinFsp network-volume prefix so native Windows handle-to-path APIs work without elevation. | Native callback tests on every Windows build; CI installs WinFsp and performs a real mount. A WinFsp 2.1 mount was also validated end-to-end against owned Fabric fixtures. |
 | macOS | [macFUSE](https://macfuse.github.io/) plus Xcode command-line tools. Build with `CGO_ENABLED=1`; macFUSE must remain installed at runtime. | Native adapter tests and compilation only. A real macOS mount has not been validated in this release. |
 
 Linux:
@@ -132,6 +132,12 @@ Windows PowerShell:
 
 # Close files, then press Ctrl+C in the foreground mount terminal.
 ```
+
+Drive-letter mounts appear as local WinFsp network drives. This lets
+`GetFinalPathNameByHandleW`—and therefore Node.js `fs.realpath.native`—resolve
+the root, directories, and files without requiring an elevated Mount Manager
+mount. Resolved paths use the equivalent `\\fabricfs\<drive-letter>\...` UNC
+form.
 
 macOS:
 
