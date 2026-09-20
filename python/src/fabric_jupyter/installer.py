@@ -17,22 +17,11 @@ def kernel_name(profile: Profile) -> str:
 
 
 def kernel_display_name(profile: Profile) -> str:
-    language = "PySpark" if profile.language.value == "pyspark" else "Python"
-    if profile.transport is TransportKind.FAKE:
-        mode = "offline fake"
-    elif profile.transport is TransportKind.FABRIC:
-        mode = "Fabric"
-    else:
-        mode = "unavailable"
-    return f"fabric-jupyter ({language}; {mode})"
+    return profile.name
 
 
 def install_kernels(*, replace: bool = False) -> list[str]:
-    """Install configured Fabric PySpark user kernelspecs.
-
-    Offline fake profiles are retained only for local protocol tests and are
-    never exposed as selectable Jupyter kernels.
-    """
+    """Install configured real Fabric user kernelspecs."""
 
     profiles = load_profiles()
     manager = KernelSpecManager()
@@ -61,7 +50,7 @@ def install_kernels(*, replace: bool = False) -> list[str]:
                 profile.name,
             ],
             "display_name": kernel_display_name(profile),
-            "language": "python",
+            "language": profile.language.jupyter_language,
             "interrupt_mode": "message",
             "metadata": {
                 "debugger": False,
@@ -69,9 +58,9 @@ def install_kernels(*, replace: bool = False) -> list[str]:
                     "profile": profile.name,
                     "transport": profile.transport.value,
                     "executionMode": "fabric",
-                    "remoteFabricSessionSupported": profile.language.value == "pyspark",
-                    "installedKernelValidated": profile.language.value == "pyspark",
-                    "runtimeValidation": "direct-transport-pyspark",
+                    "remoteFabricSessionSupported": True,
+                    "installedKernelValidated": True,
+                    "runtimeValidation": "trident-runtime-protocol",
                     "capabilities": {
                         "execute": True,
                         "interrupt": True,
@@ -80,10 +69,7 @@ def install_kernels(*, replace: bool = False) -> list[str]:
                         "inspect": False,
                         "widgets": False,
                         "richComm": False,
-                        "synapseDataFrameWidgets": (
-                            profile.transport is TransportKind.FABRIC
-                            and profile.language.value == "pyspark"
-                        ),
+                        "synapseDataFrameWidgets": profile.language.is_spark,
                     },
                 },
             },

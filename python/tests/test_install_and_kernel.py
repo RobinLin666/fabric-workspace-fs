@@ -2,18 +2,9 @@ from __future__ import annotations
 
 import asyncio
 import json
-import os
-import subprocess
-import sys
-import time
-from contextlib import suppress
 from pathlib import Path
 from unittest.mock import AsyncMock, MagicMock
 
-from jupyter_client import KernelManager
-from jupyter_client.kernelspec import KernelSpecManager
-
-from fabric_jupyter.broker import BrokerClient, load_endpoint
 from fabric_jupyter.config import write_profiles
 from fabric_jupyter.installer import install_kernels
 from fabric_jupyter.kernel import FabricKernel
@@ -25,27 +16,9 @@ from fabric_jupyter.models import (
     Profile,
     TransportKind,
 )
-from fabric_jupyter.paths import broker_endpoint_path
 
 WORKSPACE = "11111111-1111-1111-1111-111111111111"
 NOTEBOOK = "22222222-2222-2222-2222-222222222222"
-
-
-def _get_shell_reply(client, message_id: str) -> dict:
-    while True:
-        reply = client.get_shell_msg(timeout=15)
-        if reply["parent_header"].get("msg_id") == message_id:
-            return reply
-
-
-def _isolated_kernel_env(local_state: Path) -> dict[str, str]:
-    env = os.environ.copy()
-    env["JUPYTER_DATA_DIR"] = str(local_state / "jupyter")
-    env["XDG_CONFIG_HOME"] = str(local_state / "config")
-    env["XDG_STATE_HOME"] = str(local_state / "state")
-    env["APPDATA"] = str(local_state / "config")
-    env["LOCALAPPDATA"] = str(local_state / "state")
-    return env
 
 
 def test_user_kernelspec_install(local_state: Path, monkeypatch) -> None:
@@ -54,108 +27,41 @@ def test_user_kernelspec_install(local_state: Path, monkeypatch) -> None:
     assert not (local_state / "jupyter" / "kernels" / "fabric-pyspark").exists()
 
 
-def test_fabric_kernelspec_marks_pyspark_as_live_validated(
+def test_fabric_kernelspecs_use_trident_runtime_languages(
     local_state: Path, monkeypatch
 ) -> None:
-    target = FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYSPARK)
-    pyspark = Profile(
-        name="real-pyspark",
-        language=FabricLanguage.PYSPARK,
-        transport=TransportKind.FABRIC,
-        target=target,
-    )
-    write_profiles({pyspark.name: pyspark})
-    monkeypatch.setenv("JUPYTER_DATA_DIR", str(local_state / "jupyter"))
-    install_kernels()
-    kernels = local_state / "jupyter" / "kernels"
-    pyspark_spec = json.loads((kernels / "real-pyspark" / "kernel.json").read_text())
-    assert pyspark_spec["metadata"]["fabric_jupyter"]["installedKernelValidated"] is True
-    assert pyspark_spec["metadata"]["fabric_jupyter"]["remoteFabricSessionSupported"] is True
-    assert pyspark_spec["display_name"] == "fabric-jupyter (PySpark; Fabric)"
-
-
-def test_replace_removes_an_existing_fake_kernelspec(local_state: Path, monkeypatch) -> None:
-    monkeypatch.setenv("JUPYTER_DATA_DIR", str(local_state / "jupyter"))
-    fake_spec = local_state / "jupyter" / "kernels" / "fabric-pyspark"
-    fake_spec.mkdir(parents=True)
-    (fake_spec / "kernel.json").write_text("{}")
-    assert install_kernels(replace=True) == []
-    assert not fake_spec.exists()
-
-
-def test_real_jupyter_client_with_fake_broker(
-    local_state: Path, monkeypatch
-) -> None:
-    profile = Profile(
-        name="test",
-        language=FabricLanguage.PYSPARK,
-        target=FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYSPARK),
-    )
-    write_profiles({profile.name: profile})
-    kernels = local_state / "jupyter" / "kernels" / "test"
-    kernels.mkdir(parents=True)
-    (kernels / "kernel.json").write_text(
-        json.dumps(
-            {
-                "argv": [
-                    sys.executable,
-                    "-m",
-                    "fabric_jupyter",
-                    "kernel",
-                    "-f",
-                    "{connection_file}",
-                    "--profile",
-                    "test",
-                ],
-                "display_name": "test",
-                "language": "python",
-            }
+    profiles = {
+        name: Profile(
+            name=name,
+            language=language,
+            transport=TransportKind.FABRIC,
+            target=FabricTarget(WORKSPACE, NOTEBOOK, language),
         )
-    )
+        for name, language in {
+            "fabric-pyspark": FabricLanguage.PYSPARK,
+            "fabric-spark": FabricLanguage.SPARK,
+            "fabric-sparkr": FabricLanguage.SPARKR,
+            "fabric-python-3.11": FabricLanguage.PYTHON311,
+            "fabric-python-3.12": FabricLanguage.PYTHON312,
+        }.items()
+    }
+    write_profiles(profiles)
     monkeypatch.setenv("JUPYTER_DATA_DIR", str(local_state / "jupyter"))
-    env = _isolated_kernel_env(local_state)
-    broker = subprocess.Popen(
-        [sys.executable, "-m", "fabric_jupyter", "broker", "--profile", "test", "--idle-timeout", "60"],
-        env=env,
-        stdout=subprocess.PIPE,
-        stderr=subprocess.PIPE,
-        text=True,
-    )
-    deadline = time.monotonic() + 15
-    while not broker_endpoint_path().exists() and time.monotonic() < deadline:
-        time.sleep(0.05)
-    assert broker_endpoint_path().exists(), broker.stderr.read()
-    manager = KernelManager(kernel_name="test", kernel_spec_manager=KernelSpecManager())
-    client = None
-    try:
-        manager.start_kernel(env=env)
-        client = manager.client()
-        client.start_channels()
-        client.wait_for_ready(timeout=15)
-        sessions = asyncio.run(BrokerClient(load_endpoint()).status())
-        assert len(sessions) == 1
-        message_id = client.execute("print('not evaluated')")
-        messages: list[dict] = []
-        while True:
-            message = client.get_iopub_msg(timeout=15)
-            if message["parent_header"].get("msg_id") == message_id:
-                messages.append(message)
-                if (
-                    message["msg_type"] == "status"
-                    and message["content"]["execution_state"] == "idle"
-                ):
-                    break
-        assert any(message["msg_type"] == "stream" for message in messages)
-        assert any(message["msg_type"] == "execute_result" for message in messages)
-    finally:
-        if client is not None:
-            with suppress(Exception):
-                client.stop_channels()
-        with suppress(Exception):
-            manager.shutdown_kernel(now=True)
-        broker.terminate()
-        with suppress(subprocess.TimeoutExpired):
-            broker.wait(timeout=10)
+    assert install_kernels() == list(profiles)
+    kernels = local_state / "jupyter" / "kernels"
+    expected_languages = {
+        "fabric-pyspark": "python",
+        "fabric-spark": "scala",
+        "fabric-sparkr": "r",
+        "fabric-python-3.11": "python",
+        "fabric-python-3.12": "python",
+    }
+    for name, language in expected_languages.items():
+        spec = json.loads((kernels / name / "kernel.json").read_text())
+        assert spec["display_name"] == name
+        assert spec["language"] == language
+        assert spec["metadata"]["fabric_jupyter"]["installedKernelValidated"] is True
+        assert spec["metadata"]["fabric_jupyter"]["runtimeValidation"] == "trident-runtime-protocol"
 
 
 def test_kernel_passes_through_display_updates_without_buffering() -> None:

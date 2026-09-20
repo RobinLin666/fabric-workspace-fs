@@ -63,7 +63,20 @@ def test_running_broker_status(
     local_state: Path, capsys: pytest.CaptureFixture[str],
 ) -> None:
     async def check() -> None:
-        server = BrokerServer()
+        from fabric_jupyter.models import FabricLanguage, FabricTarget, Profile, TransportKind
+
+        server = BrokerServer(
+            profile=Profile(
+                name="test",
+                language=FabricLanguage.PYSPARK,
+                transport=TransportKind.FABRIC,
+                target=FabricTarget(
+                    "11111111-1111-1111-1111-111111111111",
+                    "22222222-2222-2222-2222-222222222222",
+                    FabricLanguage.PYSPARK,
+                ),
+            )
+        )
         await server.start(persist_endpoint=True)
         try:
             assert await _broker_status(None) == 0
@@ -81,9 +94,7 @@ def test_profile_show_supported_invocation(
 ) -> None:
     assert main(["profile", "show"]) == 0
     captured = capsys.readouterr()
-    assert "fabric-pyspark" in captured.out
-    assert "fabric-python" in captured.out
-    assert json.loads(captured.out)
+    assert json.loads(captured.out)["profiles"] == []
     assert captured.err == ""
 
 
@@ -93,12 +104,14 @@ def test_profile_show_explicit_config(
     config = ensure_private(state_dir()) / "profiles.json"
     assert main([
         "profile", "configure", "--config", str(config),
-        "--name", "custom-python", "--transport", "fake",
+        "--name", "custom-pyspark", "--transport", "fabric", "--language", "pyspark",
+        "--workspace", "11111111-1111-1111-1111-111111111111",
+        "--notebook", "22222222-2222-2222-2222-222222222222",
     ]) == 0
     capsys.readouterr()
     assert main(["profile", "show", "--config", str(config)]) == 0
     captured = capsys.readouterr()
-    assert "custom-python" in captured.out
+    assert "custom-pyspark" in captured.out
     assert json.loads(captured.out)
     assert captured.err == ""
 

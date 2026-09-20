@@ -17,9 +17,38 @@ TARGET = FabricTarget(
 )
 
 
-def test_unverified_pure_python_runtime_is_rejected_before_auth():
-    with pytest.raises(RuntimeFailure, match="real Python runtime is not supported"):
-        NotebookRuntimeTransport(FabricTarget(TARGET.workspace_id, TARGET.notebook_id, FabricLanguage.PYTHON))
+def test_pure_python_runtime_uses_the_jupyter_session_kernel():
+    runtime = NotebookRuntimeTransport(
+        FabricTarget(TARGET.workspace_id, TARGET.notebook_id, FabricLanguage.PYTHON312)
+    )
+    assert runtime.target.language.session_kernel_name == "jupyter"
+
+
+@pytest.mark.parametrize(
+    ("language", "control_messages"),
+    [
+        (FabricLanguage.PYSPARK, [("set_language", "pyspark"), ("start_livy_session", {})]),
+        (FabricLanguage.SPARK, [("set_language", "spark"), ("start_livy_session", {})]),
+        (FabricLanguage.SPARKR, [("set_language", "sparkr"), ("start_livy_session", {})]),
+        (FabricLanguage.PYTHON311, [("switch_runtime_kernel", "python3.11")]),
+        (FabricLanguage.PYTHON312, [("switch_runtime_kernel", "python3.12")]),
+    ],
+)
+def test_runtime_configures_each_supported_kernel(
+    language: FabricLanguage, control_messages: list[tuple[str, object]]
+) -> None:
+    async def run() -> None:
+        runtime = NotebookRuntimeTransport(
+            FabricTarget(TARGET.workspace_id, TARGET.notebook_id, language)
+        )
+        runtime._send = AsyncMock()
+        runtime._control = AsyncMock()
+        await runtime._configure()
+        assert [
+            call.args for call in runtime._control.call_args_list[-len(control_messages):]
+        ] == control_messages
+
+    asyncio.run(run())
 
 
 def frame(kind, content, parent=None):

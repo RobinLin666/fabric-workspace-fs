@@ -54,7 +54,11 @@ def test_target_ids_are_canonicalized_before_policy_and_path_use() -> None:
 
 
 def test_profile_config_is_strict_and_never_serializes_secret(local_state: Path) -> None:
-    profile = Profile(name="fabric-python", language=FabricLanguage.PYTHON)
+    profile = Profile(
+        name="fabric-python-3.12",
+        language=FabricLanguage.PYTHON312,
+        target=FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYTHON312),
+    )
     path = write_profiles({profile.name: profile})
     assert load_profiles(path)[profile.name] == profile
     view = inspect_profiles(path)
@@ -65,13 +69,13 @@ def test_profile_config_is_strict_and_never_serializes_secret(local_state: Path)
 
 
 def test_fabric_profile_requires_target_and_serializes_bounded_timeouts() -> None:
-    with pytest.raises(ValueError, match="real Python runtime is not supported"):
-        Profile(
-            name="real-python",
-            language=FabricLanguage.PYTHON,
-            transport=TransportKind.FABRIC,
-            target=FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYTHON),
-        )
+    python_profile = Profile(
+        name="fabric-python-3.12",
+        language=FabricLanguage.PYTHON312,
+        transport=TransportKind.FABRIC,
+        target=FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYTHON312),
+    )
+    assert Profile.from_dict(python_profile.public_dict()) == python_profile
     with pytest.raises(ValueError, match="explicit target"):
         Profile(
             name="real",
@@ -103,7 +107,7 @@ def test_invalid_fuse_identity_is_rejected(tmp_path: Path) -> None:
     mount.mkdir()
     (mount / ".fabric.json").write_text("{}")
     profile = Profile(
-        name="from-fuse", language=FabricLanguage.PYTHON, fuse_notebook_path=str(mount)
+        name="from-fuse", language=FabricLanguage.PYTHON312, fuse_notebook_path=str(mount)
     )
     with pytest.raises(ValueError):
         resolve_target(profile)
@@ -155,7 +159,7 @@ def test_cli_does_not_promote_synthetic_default_target_to_fabric(
     assert "explicit target" in capsys.readouterr().err
 
 
-def test_cli_rejects_real_python_before_transport_or_auth(
+def test_cli_configures_python_311_runtime(
     local_state: Path, capsys: pytest.CaptureFixture[str]
 ) -> None:
     assert (
@@ -164,7 +168,7 @@ def test_cli_rejects_real_python_before_transport_or_auth(
                 "profile",
                 "configure",
                 "--name",
-                "fabric-python",
+                "fabric-python-3.11",
                 "--transport",
                 "fabric",
                 "--workspace",
@@ -173,9 +177,6 @@ def test_cli_rejects_real_python_before_transport_or_auth(
                 NOTEBOOK,
             ]
         )
-        == 2
+        == 0
     )
-    assert (
-        "real Python runtime is not supported; use PySpark or offline fake"
-        in capsys.readouterr().err
-    )
+    assert load_profiles()["fabric-python-3.11"].language is FabricLanguage.PYTHON311

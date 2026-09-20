@@ -16,8 +16,8 @@ fabric-jupyter install-kernels
 
 The command installs user-scoped kernelspecs only for configured `fabric`
 profiles. It does not modify a system kernelspec or start a service. A new
-install does not expose a fake kernel: configure a Fabric PySpark profile with
-an explicit Workspace and Notebook target, then run
+install exposes no kernel until a Fabric profile has an explicit Workspace and
+Notebook target. Configure one or more of the five supported profiles, then run
 `fabric-jupyter install-kernels --replace`.
 
 For a foreground local broker, bind it to one configured profile:
@@ -26,25 +26,25 @@ For a foreground local broker, bind it to one configured profile:
 fabric-jupyter broker --profile fabric-pyspark
 ```
 
-Select **fabric-jupyter (PySpark; Fabric)** from a Jupyter client after
-configuring its profile. A foreground broker accepts only its startup profile's
-resolved target/language/transport. Stop the foreground broker before changing
-profiles. A `fabric` profile is explicit authorization to connect to the
-configured Notebook. The legacy `experimental` placeholder still fails before
-acquiring credentials.
+Select the configured kernelspec by its identifier from a Jupyter client. A
+foreground broker accepts only its startup profile's resolved
+target/language/transport. Stop the foreground broker before changing profiles.
+A `fabric` profile is explicit authorization to connect to the configured
+Notebook.
 
 The distribution and command are both named `fabric-jupyter`. The importable
 Python module remains `fabric_jupyter` because Python package names cannot use
-hyphens. Existing kernelspec identifiers (`fabric-pyspark` and
-`fabric-python`) are retained for compatibility; reinstalling updates their
-visible display names without breaking saved Jupyter kernel references.
+hyphens. The available kernelspec identifiers are `fabric-pyspark`,
+`fabric-spark`, `fabric-sparkr`, `fabric-python-3.11`, and
+`fabric-python-3.12`. Reinstalling updates their visible display names without
+breaking saved Jupyter kernel references.
 Run `fabric-jupyter install-kernels --replace` after an upgrade.
 
 ## Real Fabric Runtime status
 
-**Real Notebook execution is opt-in and uses a private, experimental protocol.**
-Local heartbeat and deterministic fake replies prove only the local Jupyter
-adapter. A `fabric` profile starts an owned remote session, performs remote
+**Real Notebook execution is opt-in and uses a private protocol.** Local
+capability reporting proves only the local Jupyter adapter. A `fabric` profile
+starts an owned remote session, performs remote
 `kernel_info`, and waits for compute readiness before execution.
 
 ```sh
@@ -54,7 +54,7 @@ fabric-jupyter runtime-status --require-fabric
 
 Both commands report offline capabilities without authenticating or contacting
 Fabric. They do not prove that credentials, capacity or a configured Notebook
-are usable. Unknown transports are rejected and `experimental` fails closed.
+are usable. Unknown transports are rejected.
 Do not add tokens to kernelspecs or profiles. See the
 [runtime guide](JUPYTER_RUNTIME.md) for configuration, lifecycle, protocol
 limitations, and the distinction from the documented Lakehouse Livy API.
@@ -83,8 +83,7 @@ A target is resolved in this order:
 2. The profile's explicit `target`.
 3. A profile's optional `fuseNotebookPath/.fabric.json`.
 
-The generated default profiles are retained for local protocol tests only and
-are not installed as Jupyter kernels. Configure an explicit `fabric` profile
+There are no generated default profiles. Configure an explicit `fabric` profile
 to opt into real execution.
 
 Resolution does not grant execution authority. The broker resolves its own
@@ -160,14 +159,12 @@ If an existing ACL or filesystem cannot be verified, the broker stays stopped.
 ## Execution behavior and limitations
 
 The initial release maps canonical Jupyter execute, stream, result, error,
-interrupt, and shutdown semantics to the broker. The bundled `fake` transport
-is reserved for deterministic local protocol tests and is never registered as
-a Jupyter kernel.
+interrupt, and shutdown semantics to the broker. It registers only configured
+Fabric runtimes.
 
-`experimental` is intentionally inert. `fabric` is a separate, opt-in
-implementation with target-bound workload discovery, in-memory Azure CLI
-credentials and bounded REST/WebSocket operations. It does not silently fall
-back to fake results. Only owned runtime sessions are stopped/deleted.
+`fabric` is a target-bound implementation with in-memory Azure CLI credentials
+and bounded REST/WebSocket operations. Only owned runtime sessions are
+stopped/deleted.
 
 Current capability metadata truthfully reports no completion, inspect,
 widgets, rich comms, stdin prompts, or debugger integration. Notebook
@@ -187,5 +184,5 @@ pytest
 python -m build
 ```
 
-Tests use the fake transport and local loopback/Unix IPC. They do not contact
-Fabric, start Spark, or modify remote resources.
+Tests use mock Fabric transports and local loopback/Unix IPC. They do not
+contact Fabric, start Spark, or modify remote resources.

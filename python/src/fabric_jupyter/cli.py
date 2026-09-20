@@ -16,6 +16,14 @@ from .models import FabricLanguage, FabricTarget, Profile, TransportKind, redact
 from .paths import profiles_path
 from .readiness import runtime_status
 
+_PROFILE_LANGUAGES = {
+    "fabric-pyspark": FabricLanguage.PYSPARK,
+    "fabric-spark": FabricLanguage.SPARK,
+    "fabric-sparkr": FabricLanguage.SPARKR,
+    "fabric-python-3.11": FabricLanguage.PYTHON311,
+    "fabric-python-3.12": FabricLanguage.PYTHON312,
+}
+
 
 def _parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
@@ -109,10 +117,14 @@ def _configure_profile(args: argparse.Namespace) -> Path:
         language = FabricLanguage(args.language)
     elif existing is not None:
         language = existing.language
-    elif args.name.endswith("pyspark"):
-        language = FabricLanguage.PYSPARK
     else:
-        language = FabricLanguage.PYTHON
+        try:
+            language = _PROFILE_LANGUAGES[args.name]
+        except KeyError as exc:
+            raise ValueError(
+                "--language is required for profiles other than fabric-pyspark, "
+                "fabric-spark, fabric-sparkr, fabric-python-3.11, and fabric-python-3.12"
+            ) from exc
     if (args.workspace is None) != (args.notebook is None):
         raise ValueError("--workspace and --notebook must be supplied together")
     if args.workspace is not None:

@@ -18,7 +18,7 @@ from ipykernel.kernelapp import IPKernelApp
 from . import __version__
 from .broker import BrokerClient, BrokerServer, load_endpoint
 from .config import load_profiles
-from .models import EventKind, FabricTarget, Profile
+from .models import EventKind, FabricLanguage, FabricTarget, Profile
 from .table_output import INLINE_TABLE_MIMES, render_inline_table, render_table
 from .targets import resolve_target
 
@@ -59,11 +59,16 @@ class FabricKernel(IPythonKernel):
                 raise RuntimeError(f"unknown fabric-jupyter profile: {name}")
             self._profile = profile
             self._target = resolve_target(profile)
-            self.banner = (
-                "fabric-jupyter offline simulation; no local code is evaluated"
-                if profile.transport.value == "fake"
-                else "fabric-jupyter opt-in Fabric notebook runtime"
-            )
+            self.banner = "fabric-jupyter Fabric notebook runtime"
+            self.language_info = {
+                **self.language_info,
+                "name": profile.language.jupyter_language,
+                "pygments_lexer": (
+                    "scala"
+                    if profile.language is FabricLanguage.SPARK
+                    else ("r" if profile.language is FabricLanguage.SPARKR else "python")
+                ),
+            }
         except (OSError, RuntimeError, ValueError) as exc:
             self._startup_error = _diagnostic("startup configuration failed", exc)
 

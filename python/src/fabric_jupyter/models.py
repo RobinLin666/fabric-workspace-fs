@@ -11,13 +11,30 @@ from uuid import UUID
 
 class FabricLanguage(StrEnum):
     PYSPARK = "pyspark"
-    PYTHON = "python"
+    SPARK = "spark"
+    SPARKR = "sparkr"
+    PYTHON311 = "python3.11"
+    PYTHON312 = "python3.12"
+
+    @property
+    def is_spark(self) -> bool:
+        return self in {self.PYSPARK, self.SPARK, self.SPARKR}
+
+    @property
+    def session_kernel_name(self) -> str:
+        return "synapse_pyspark" if self.is_spark else "jupyter"
+
+    @property
+    def jupyter_language(self) -> str:
+        if self is self.SPARK:
+            return "scala"
+        if self is self.SPARKR:
+            return "r"
+        return "python"
 
 
 class TransportKind(StrEnum):
-    FAKE = "fake"
     FABRIC = "fabric"
-    EXPERIMENTAL = "experimental"
 
 
 class SessionState(StrEnum):
@@ -94,7 +111,7 @@ class Profile:
 
     name: str
     language: FabricLanguage
-    transport: TransportKind = TransportKind.FAKE
+    transport: TransportKind = TransportKind.FABRIC
     target: FabricTarget | None = None
     fuse_notebook_path: str | None = None
     idle_timeout_seconds: int = 900
@@ -103,7 +120,7 @@ class Profile:
     request_timeout_seconds: int = 30
 
     def __post_init__(self) -> None:
-        allowed_name_characters = "-_abcdefghijklmnopqrstuvwxyz0123456789"
+        allowed_name_characters = ".-_abcdefghijklmnopqrstuvwxyz0123456789"
         if (
             not self.name
             or len(self.name) > 64
@@ -122,18 +139,7 @@ class Profile:
             raise ValueError("profile target language must match profile language")
         if self.fuse_notebook_path is not None and not self.fuse_notebook_path:
             raise ValueError("fuse_notebook_path cannot be empty")
-        if (
-            self.transport is TransportKind.FABRIC
-            and self.language is FabricLanguage.PYTHON
-        ):
-            raise ValueError(
-                "real Python runtime is not supported; use PySpark or offline fake"
-            )
-        if (
-            self.transport is TransportKind.FABRIC
-            and self.target is None
-            and self.fuse_notebook_path is None
-        ):
+        if self.target is None and self.fuse_notebook_path is None:
             raise ValueError(
                 "fabric transport requires an explicit target or fuseNotebookPath"
             )
@@ -175,7 +181,7 @@ class Profile:
             return cls(
                 name=str(value["name"]),
                 language=FabricLanguage(str(value["language"])),
-                transport=TransportKind(str(value.get("transport", "fake"))),
+                transport=TransportKind(str(value["transport"])),
                 target=target,
                 fuse_notebook_path=str(value["fuseNotebookPath"])
                 if "fuseNotebookPath" in value

@@ -14,6 +14,7 @@ from fabric_jupyter.models import (
     FabricLanguage,
     FabricTarget,
     Profile,
+    TransportKind,
 )
 from fabric_jupyter.table_output import (
     INLINE_TABLE_MIMES,
@@ -162,7 +163,12 @@ def test_inline_tables_flow_through_kernel_display_updates(mime: str) -> None:
             FabricLanguage.PYSPARK,
         )
         kernel = FabricKernel()
-        kernel._profile = Profile(name="test", language=FabricLanguage.PYSPARK, target=target)
+        kernel._profile = Profile(
+            name="test",
+            language=FabricLanguage.PYSPARK,
+            transport=TransportKind.FABRIC,
+            target=target,
+        )
         kernel._target = target
         kernel.send_response = MagicMock()
         kernel.iopub_socket = object()

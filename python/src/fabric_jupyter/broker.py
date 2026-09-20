@@ -14,7 +14,6 @@ from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import Any, cast
 
-from .config import default_profiles
 from .models import (
     BrokerSession,
     EventKind,
@@ -91,11 +90,9 @@ class BrokerServer:
         endpoint: BrokerEndpoint | None = None,
         profile: Profile | None = None,
     ) -> None:
-        self._profile = profile or default_profiles()["fabric-pyspark"]
-        if self._profile.transport is TransportKind.EXPERIMENTAL:
-            raise ValueError(
-                "experimental transport is unavailable; broker will not start"
-            )
+        if profile is None:
+            raise ValueError("broker requires an explicit Fabric profile")
+        self._profile = profile
         self._target = resolve_target(self._profile)
         self._transport_override = transport
         self._transport: FabricTransport | None = transport
@@ -319,7 +316,7 @@ class BrokerServer:
 
     async def _execute(self, params: Mapping[str, Any], writer: asyncio.StreamWriter) -> None:
         request = parse_execute(params)
-        transport_kind = TransportKind(str(params.get("transport", "fake")))
+        transport_kind = TransportKind(str(params.get("transport")))
         if transport_kind is not self._profile.transport:
             raise ValueError("request transport is not authorized by this broker's startup profile")
         request = replace(request, target=self._authorize_target(request.target))

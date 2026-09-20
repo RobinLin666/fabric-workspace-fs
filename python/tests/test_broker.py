@@ -16,7 +16,7 @@ from fabric_jupyter.models import (
     Profile,
     TransportKind,
 )
-from fabric_jupyter.transport import FabricTransport, FakeFabricTransport
+from fabric_jupyter.transport import FabricTransport
 
 WORKSPACE = "11111111-1111-1111-1111-111111111111"
 NOTEBOOK = "22222222-2222-2222-2222-222222222222"
@@ -63,25 +63,38 @@ class UnverifiedShutdownTransport(MockRuntimeTransport):
 
 def test_broker_auth_execute_and_cleanup(local_state: Path) -> None:
     async def run() -> None:
-        transport = FakeFabricTransport()
+        transport = MockRuntimeTransport()
         target = FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYSPARK)
         server = BrokerServer(
             transport=transport, idle_timeout_seconds=60,
-            profile=Profile(name="test", language=FabricLanguage.PYSPARK, target=target),
+            profile=Profile(
+                name="test",
+                language=FabricLanguage.PYSPARK,
+                transport=TransportKind.FABRIC,
+                target=target,
+            ),
         )
         endpoint = await server.start(persist_endpoint=True)
         assert load_endpoint().public_dict() == endpoint.public_dict()
+        await BrokerClient(endpoint).connect(target, TransportKind.FABRIC)
         events = await BrokerClient(endpoint).execute(
             request_id="request-1",
             target=target,
             code="print('safe')",
             silent=False,
-            transport=TransportKind.FAKE,
+            transport=TransportKind.FABRIC,
         )
-        assert [event.kind.value for event in events] == ["status", "stream", "result", "status"]
+        assert [event.kind.value for event in events] == [
+            "status",
+            "stream",
+            "display_data",
+            "update_display_data",
+            "clear_output",
+            "status",
+        ]
         assert len(await BrokerClient(endpoint).status()) == 1
         await BrokerClient(endpoint).shutdown(target)
-        assert transport.shutdown_targets == [target]
+        assert transport.stopped == 1
         await server.close()
 
     asyncio.run(run())
@@ -206,7 +219,15 @@ def test_fabric_broker_recreates_terminal_transport_after_shutdown(
 @pytest.mark.parametrize("invalid_auth", ["wrong", "\u2603"])
 def test_broker_rejects_wrong_auth(local_state: Path, invalid_auth: str) -> None:
     async def run() -> None:
-        server = BrokerServer()
+        target = FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYSPARK)
+        server = BrokerServer(
+            profile=Profile(
+                name="test",
+                language=FabricLanguage.PYSPARK,
+                transport=TransportKind.FABRIC,
+                target=target,
+            )
+        )
         endpoint = await server.start()
         attacker = BrokerClient(BrokerEndpoint(endpoint.transport, endpoint.address, invalid_auth))
         with pytest.raises(RuntimeError, match="unauthorized"):

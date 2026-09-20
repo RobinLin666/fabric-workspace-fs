@@ -132,7 +132,7 @@ jobs:
         run: |
           ruff check .
           mypy src
-      - name: Test fake broker and real local Jupyter protocol
+      - name: Test mock broker and local Jupyter protocol
         working-directory: python
         run: pytest
       - name: Build package

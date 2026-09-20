@@ -21,7 +21,7 @@ from websockets.asyncio.client import ClientConnection, connect
 from websockets.exceptions import WebSocketException
 from websockets.typing import Subprotocol
 
-from .models import EventKind, ExecutionEvent, ExecutionRequest, FabricLanguage, FabricTarget
+from .models import EventKind, ExecutionEvent, ExecutionRequest, FabricTarget
 from .runtime_auth import RuntimeAccess, RuntimeFailure, uuid_text
 from .transport import FabricTransport
 
@@ -69,8 +69,6 @@ class NotebookRuntimeTransport(FabricTransport):
         self, target: FabricTarget, idle_timeout_seconds: int = 900, *,
         access: RuntimeAccess | None = None,
     ) -> None:
-        if target.language is not FabricLanguage.PYSPARK:
-            raise RuntimeFailure("real Python runtime is not supported; use PySpark or offline fake")
         self.target = target
         self.idle_timeout_seconds = idle_timeout_seconds
         self._access = access or RuntimeAccess(target)
@@ -146,7 +144,7 @@ class NotebookRuntimeTransport(FabricTransport):
                 ) from None
 
     async def _allocate(self) -> None:
-        kernel = "synapse_pyspark"
+        kernel = self.target.language.session_kernel_name
         try:
             _, model = await self._access.runtime_request(
                 "POST", "/api/sessions", expected=(201,),
@@ -303,12 +301,20 @@ class NotebookRuntimeTransport(FabricTransport):
                 "spark.synapse.nbs.session.timeout": str(self.idle_timeout_seconds * 1000),
             },
         })
-        await self._control("set_kernel_options", {
-            "enableDebugMode": False, "enableSparkJob": False, "enableSparkAdvice": False,
-            "deleteKernelOnComputeSessionEnd": False,
-        })
-        await self._control("set_language", "pyspark")
-        await self._control("start_livy_session", {})
+        await self._control(
+            "set_kernel_options",
+            {
+                "enableDebugMode": False,
+                "enableSparkJob": self.target.language.is_spark,
+                "enableSparkAdvice": self.target.language.is_spark,
+                "deleteKernelOnComputeSessionEnd": False,
+            },
+        )
+        if self.target.language.is_spark:
+            await self._control("set_language", self.target.language.value)
+            await self._control("start_livy_session", {})
+        else:
+            await self._control("switch_runtime_kernel", self.target.language.value)
 
     async def _wait_state(self, states: set[str], timeout: float) -> None:
         async with asyncio.timeout(timeout):

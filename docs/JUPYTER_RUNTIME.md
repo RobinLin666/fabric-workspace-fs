@@ -1,14 +1,20 @@
 # Opt-in Fabric Notebook runtime
 
 `fabric-jupyter` can connect to a Notebook-bound remote runtime using an
-explicit `fabric` profile. **This is an experimental private-protocol
+explicit `fabric` profile. **This is a private-protocol
 integration**, not a supported Microsoft public API contract. Service changes
 can break it. No Jupyter kernel is installed until a real profile is explicitly
 configured and installed.
 
-Real execution currently supports **PySpark only**. A real Python runtime
-profile is rejected before authentication until that protocol is separately
-validated.
+Real execution supports the following configured profiles:
+
+| Profile | Runtime protocol selection |
+| --- | --- |
+| `fabric-pyspark` | `synapse_pyspark` with `pyspark` |
+| `fabric-spark` | `synapse_pyspark` with `spark` (Scala) |
+| `fabric-sparkr` | `synapse_pyspark` with `sparkr` |
+| `fabric-python-3.11` | `jupyter` with `python3.11` |
+| `fabric-python-3.12` | `jupyter` with `python3.12` |
 
 ## Authentication and configuration
 
@@ -19,6 +25,18 @@ separately:
 python -m pip install ./python
 az login --tenant <your-tenant-id>
 fabric-jupyter profile configure --name fabric-pyspark --transport fabric \
+  --workspace 11111111-1111-1111-1111-111111111111 \
+  --notebook 22222222-2222-2222-2222-222222222222
+fabric-jupyter profile configure --name fabric-spark --transport fabric \
+  --workspace 11111111-1111-1111-1111-111111111111 \
+  --notebook 22222222-2222-2222-2222-222222222222
+fabric-jupyter profile configure --name fabric-sparkr --transport fabric \
+  --workspace 11111111-1111-1111-1111-111111111111 \
+  --notebook 22222222-2222-2222-2222-222222222222
+fabric-jupyter profile configure --name fabric-python-3.11 --transport fabric \
+  --workspace 11111111-1111-1111-1111-111111111111 \
+  --notebook 22222222-2222-2222-2222-222222222222
+fabric-jupyter profile configure --name fabric-python-3.12 --transport fabric \
   --workspace 11111111-1111-1111-1111-111111111111 \
   --notebook 22222222-2222-2222-2222-222222222222
 fabric-jupyter install-kernels --replace
@@ -37,11 +55,9 @@ IDs take precedence over optional mounted Notebook `.fabric.json` discovery.
 The broker snapshots that resolved target at startup: a client cannot change
 its workspace, Notebook, language, transport, Lakehouse, or Environment.
 
-To remove a Fabric kernel, delete its kernelspec through Jupyter or replace
-the profile with a non-Fabric test profile and run
-`fabric-jupyter install-kernels --replace`. `runtime-status` describes
-implemented capabilities without authenticating; it is not evidence of remote
-readiness.
+To remove a Fabric kernel, delete its kernelspec through Jupyter. `runtime-status`
+describes implemented capabilities without authenticating; it is not evidence of
+remote readiness.
 
 ## Lifecycle and supported messages
 
@@ -130,7 +146,7 @@ substitute for orderly shutdown.
 - General rich comms/widgets, binary buffers, completion, inspection,
   debugging, interactive stdin, custom environment/Lakehouse attachment,
   high-concurrency session sharing, and notebook-reference artifact serving
-  are not supported. No client-side code evaluation or fake fallback is used
+  are not supported. No client-side code evaluation or fallback is used
   by a `fabric` profile.
 
 The documented [Fabric Livy API](https://learn.microsoft.com/fabric/data-engineering/api-livy-overview)
@@ -155,5 +171,5 @@ captured native-producer fixtures. The SQL sample can use a read-only Spark
 Real validation requires separate explicit authorization and a disposable
 owned Notebook. Verify remote readiness, a harmless print/arithmetic result,
 interrupt where supported, orderly shutdown and exact-ID fixture cleanup.
-Local heartbeat or fake protocol success alone must never be reported as a
+Local heartbeat alone must never be reported as a
 real Fabric session.

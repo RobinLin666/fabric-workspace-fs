@@ -9,13 +9,12 @@ def runtime_status() -> dict[str, Any]:
     return {
         "remoteFabricSessionSupported": True,
         "remoteCheckPerformed": False,
-        "defaultTransport": "fake",
+        "defaultTransport": "fabric",
         "security": {
             "serverBoundTargetPolicy": True,
             "privateEndpointRequired": True,
         },
         "transports": {
-            "fake": {"available": True, "executesCode": False, "createsRemoteSession": False},
             "fabric": {
                 "available": True,
                 "optIn": True,
@@ -23,13 +22,13 @@ def runtime_status() -> dict[str, Any]:
                 "executesCode": True,
                 "createsRemoteSession": True,
                 "installedKernelValidated": True,
-                "validatedLanguages": ["pyspark"],
-                "pythonStatus": "unavailable-unverified",
-            },
-            "experimental": {
-                "available": False,
-                "executesCode": False,
-                "createsRemoteSession": False,
+                "validatedLanguages": [
+                    "pyspark",
+                    "spark",
+                    "sparkr",
+                    "python3.11",
+                    "python3.12",
+                ],
             },
         },
         "blockers": [],
