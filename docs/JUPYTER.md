@@ -14,12 +14,11 @@ python -m pip install ./python
 fabric-jupyter install-kernels
 ```
 
-The command installs user-scoped `fabric-pyspark` and `fabric-python`
-kernelspecs. It does not modify a system kernelspec or start a service. A new
-install is immediately usable with the default `fake` transport: the kernel
-starts a private per-kernel broker endpoint when no foreground broker is
-running, replies to Jupyter protocol startup messages, and returns deterministic
-fake execution results without contacting Fabric, Spark, fntk, or a mount.
+The command installs user-scoped kernelspecs only for configured `fabric`
+profiles. It does not modify a system kernelspec or start a service. A new
+install does not expose a fake kernel: configure a Fabric PySpark profile with
+an explicit Workspace and Notebook target, then run
+`fabric-jupyter install-kernels --replace`.
 
 For a foreground local broker, bind it to one configured profile:
 
@@ -27,14 +26,12 @@ For a foreground local broker, bind it to one configured profile:
 fabric-jupyter broker --profile fabric-pyspark
 ```
 
-Select **fabric-jupyter (PySpark; offline fake)** or
-**fabric-jupyter (Python; offline fake)** from a Jupyter client. A foreground
-broker accepts only its startup profile's resolved target/language/transport;
-a Python kernel cannot use a PySpark-bound broker. Prefer the default private
-per-kernel brokers when using both languages. Stop the foreground broker before
-changing profiles. A `fabric` profile is explicit authorization to connect to
-the configured Notebook. The legacy `experimental` placeholder still fails
-before acquiring credentials.
+Select **fabric-jupyter (PySpark; Fabric)** from a Jupyter client after
+configuring its profile. A foreground broker accepts only its startup profile's
+resolved target/language/transport. Stop the foreground broker before changing
+profiles. A `fabric` profile is explicit authorization to connect to the
+configured Notebook. The legacy `experimental` placeholder still fails before
+acquiring credentials.
 
 The distribution and command are both named `fabric-jupyter`. The importable
 Python module remains `fabric_jupyter` because Python package names cannot use
@@ -86,10 +83,9 @@ A target is resolved in this order:
 2. The profile's explicit `target`.
 3. A profile's optional `fuseNotebookPath/.fabric.json`.
 
-The generated default profiles include fixed local fake targets so a fresh
-install has no hidden mount or Fabric identity prerequisite. Replace those
-targets only for local tests. Use an explicit `fabric` profile to opt into real
-execution; merely replacing IDs in a fake profile does not enable it.
+The generated default profiles are retained for local protocol tests only and
+are not installed as Jupyter kernels. Configure an explicit `fabric` profile
+to opt into real execution.
 
 Resolution does not grant execution authority. The broker resolves its own
 startup profile once, stores an immutable target policy, and never accepts
@@ -102,7 +98,7 @@ The FUSE path is only a convenience identity source. It is optional and is not
 assumed to be mounted. Its `.fabric.json` must identify a `Notebook`; the
 resolver does not inspect any credential files or infer a target from names.
 
-Example profile schema (all UUIDs are fictional):
+Example Fabric profile schema (all UUIDs are fictional):
 
 ```json
 {
@@ -110,7 +106,7 @@ Example profile schema (all UUIDs are fictional):
     {
       "name": "fabric-pyspark",
       "language": "pyspark",
-      "transport": "fake",
+      "transport": "fabric",
       "target": {
         "workspaceId": "11111111-1111-1111-1111-111111111111",
         "notebookId": "22222222-2222-2222-2222-222222222222",
@@ -165,8 +161,8 @@ If an existing ACL or filesystem cannot be verified, the broker stays stopped.
 
 The initial release maps canonical Jupyter execute, stream, result, error,
 interrupt, and shutdown semantics to the broker. The bundled `fake` transport
-is the default and never evaluates code or contacts Fabric; it exists for
-deterministic local and Jupyter protocol tests.
+is reserved for deterministic local protocol tests and is never registered as
+a Jupyter kernel.
 
 `experimental` is intentionally inert. `fabric` is a separate, opt-in
 implementation with target-bound workload discovery, in-memory Azure CLI
@@ -191,5 +187,5 @@ pytest
 python -m build
 ```
 
-Tests use only the fake transport and local loopback/Unix IPC. They do not
-contact Fabric, start Spark, or modify remote resources.
+Tests use the fake transport and local loopback/Unix IPC. They do not contact
+Fabric, start Spark, or modify remote resources.

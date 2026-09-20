@@ -50,17 +50,8 @@ def _isolated_kernel_env(local_state: Path) -> dict[str, str]:
 
 def test_user_kernelspec_install(local_state: Path, monkeypatch) -> None:
     monkeypatch.setenv("JUPYTER_DATA_DIR", str(local_state / "jupyter"))
-    installed = install_kernels()
-    assert installed == ["fabric-pyspark", "fabric-python"]
-    kernels = local_state / "jupyter" / "kernels"
-    spec = json.loads((kernels / "fabric-pyspark" / "kernel.json").read_text())
-    assert spec["argv"][2:4] == ["fabric_jupyter", "kernel"]
-    assert spec["argv"][4:6] == ["-f", "{connection_file}"]
-    assert spec["interrupt_mode"] == "message"
-    assert spec["display_name"] == "fabric-jupyter (PySpark; offline fake)"
-    assert spec["metadata"]["fabric_jupyter"]["remoteFabricSessionSupported"] is False
-    assert spec["metadata"]["fabric_jupyter"]["executionMode"] == "offline-simulation"
-    assert spec["metadata"]["fabric_jupyter"]["capabilities"]["widgets"] is False
+    assert install_kernels() == []
+    assert not (local_state / "jupyter" / "kernels" / "fabric-pyspark").exists()
 
 
 def test_fabric_kernelspec_marks_pyspark_as_live_validated(
@@ -80,100 +71,16 @@ def test_fabric_kernelspec_marks_pyspark_as_live_validated(
     pyspark_spec = json.loads((kernels / "real-pyspark" / "kernel.json").read_text())
     assert pyspark_spec["metadata"]["fabric_jupyter"]["installedKernelValidated"] is True
     assert pyspark_spec["metadata"]["fabric_jupyter"]["remoteFabricSessionSupported"] is True
+    assert pyspark_spec["display_name"] == "fabric-jupyter (PySpark; Fabric)"
 
 
-def test_generated_default_kernelspec_starts_without_profile_or_broker(
-    local_state: Path, monkeypatch
-) -> None:
+def test_replace_removes_an_existing_fake_kernelspec(local_state: Path, monkeypatch) -> None:
     monkeypatch.setenv("JUPYTER_DATA_DIR", str(local_state / "jupyter"))
-    install_kernels()
-    assert not broker_endpoint_path().exists()
-
-    env = _isolated_kernel_env(local_state)
-
-    manager = KernelManager(
-        kernel_name="fabric-pyspark", kernel_spec_manager=KernelSpecManager()
-    )
-    client = None
-    try:
-        manager.start_kernel(env=env)
-        client = manager.client()
-        client.start_channels()
-        client.wait_for_ready(timeout=15)
-        marker = local_state / "completion-must-not-execute"
-        expression = f"__import__('pathlib').Path({str(marker)!r}).write_text('bad')"
-        completion_id = client.complete(expression)
-        assert _get_shell_reply(client, completion_id)["content"]["matches"] == []
-        inspect_id = client.inspect(expression)
-        assert _get_shell_reply(client, inspect_id)["content"]["found"] is False
-        assert not marker.exists()
-        message_id = client.execute("print('not evaluated')")
-        shell_reply = _get_shell_reply(client, message_id)
-        assert shell_reply["content"]["status"] == "ok"
-
-        messages: list[dict] = []
-        while True:
-            message = client.get_iopub_msg(timeout=15)
-            if message["parent_header"].get("msg_id") == message_id:
-                messages.append(message)
-                if (
-                    message["msg_type"] == "status"
-                    and message["content"]["execution_state"] == "idle"
-                ):
-                    break
-        assert any(message["msg_type"] == "stream" for message in messages)
-        assert any(message["msg_type"] == "execute_result" for message in messages)
-    finally:
-        if client is not None:
-            with suppress(Exception):
-                client.stop_channels()
-        with suppress(Exception):
-            manager.shutdown_kernel(now=True)
-
-
-def test_generated_default_kernelspec_control_shutdown_has_clean_stderr(
-    local_state: Path, monkeypatch
-) -> None:
-    monkeypatch.setenv("JUPYTER_DATA_DIR", str(local_state / "jupyter"))
-    install_kernels()
-    env = _isolated_kernel_env(local_state)
-
-    manager = KernelManager(
-        kernel_name="fabric-pyspark", kernel_spec_manager=KernelSpecManager()
-    )
-    client = None
-    process = None
-    try:
-        manager.start_kernel(env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True)
-        process = getattr(manager.provisioner, "process", None)
-        client = manager.client()
-        client.start_channels()
-        client.wait_for_ready(timeout=15)
-        message_id = client.execute("print('not evaluated')")
-        assert _get_shell_reply(client, message_id)["content"]["status"] == "ok"
-
-        shutdown_reply = client.shutdown(restart=False, reply=True, timeout=15)
-        assert shutdown_reply["content"] == {"status": "ok", "restart": False}
-
-        deadline = time.monotonic() + 15
-        while manager.is_alive() and time.monotonic() < deadline:
-            time.sleep(0.05)
-        assert not manager.is_alive()
-    finally:
-        if client is not None:
-            with suppress(Exception):
-                client.stop_channels()
-        if manager.has_kernel and manager.is_alive():
-            with suppress(Exception):
-                manager.shutdown_kernel(now=True)
-
-    stderr = ""
-    if process is not None and process.stderr is not None:
-        raw_stderr = process.stderr.read()
-        stderr = raw_stderr.decode("utf-8", errors="replace") if isinstance(raw_stderr, bytes) else raw_stderr
-    assert "Future attached to a different loop" not in stderr
-    assert "Traceback" not in stderr
-    assert "ERROR" not in stderr
+    fake_spec = local_state / "jupyter" / "kernels" / "fabric-pyspark"
+    fake_spec.mkdir(parents=True)
+    (fake_spec / "kernel.json").write_text("{}")
+    assert install_kernels(replace=True) == []
+    assert not fake_spec.exists()
 
 
 def test_real_jupyter_client_with_fake_broker(

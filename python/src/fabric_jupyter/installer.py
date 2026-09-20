@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import sys
 from pathlib import Path
+from shutil import rmtree
 
 from jupyter_client.kernelspec import KernelSpecManager
 
@@ -27,7 +28,11 @@ def kernel_display_name(profile: Profile) -> str:
 
 
 def install_kernels(*, replace: bool = False) -> list[str]:
-    """Install built-in Fabric Python and PySpark user kernelspecs."""
+    """Install configured Fabric PySpark user kernelspecs.
+
+    Offline fake profiles are retained only for local protocol tests and are
+    never exposed as selectable Jupyter kernels.
+    """
 
     profiles = load_profiles()
     manager = KernelSpecManager()
@@ -35,8 +40,14 @@ def install_kernels(*, replace: bool = False) -> list[str]:
     for profile in profiles.values():
         name = kernel_name(profile)
         spec_dir = Path(manager.user_kernel_dir) / name
+        if profile.transport is not TransportKind.FABRIC:
+            if replace and spec_dir.exists():
+                rmtree(spec_dir)
+            continue
         if spec_dir.exists() and not replace:
             raise FileExistsError(f"kernelspec already exists: {name}; use --replace")
+        if spec_dir.exists():
+            rmtree(spec_dir)
         spec_dir.mkdir(parents=True, exist_ok=True)
         kernel_json = {
             "argv": [
@@ -57,34 +68,13 @@ def install_kernels(*, replace: bool = False) -> list[str]:
                 "fabric_jupyter": {
                     "profile": profile.name,
                     "transport": profile.transport.value,
-                    "executionMode": (
-                        "offline-simulation"
-                        if profile.transport is TransportKind.FAKE
-                        else (
-                            "fabric"
-                            if profile.transport is TransportKind.FABRIC
-                            else "unavailable"
-                        )
-                    ),
-                    "remoteFabricSessionSupported": (
-                        profile.transport is TransportKind.FABRIC
-                        and profile.language.value == "pyspark"
-                    ),
-                    "installedKernelValidated": (
-                        profile.transport is TransportKind.FABRIC
-                        and profile.language.value == "pyspark"
-                    ),
-                    "runtimeValidation": (
-                        "direct-transport-pyspark"
-                        if profile.transport is TransportKind.FABRIC
-                        and profile.language.value == "pyspark"
-                        else "not-applicable"
-                    ),
+                    "executionMode": "fabric",
+                    "remoteFabricSessionSupported": profile.language.value == "pyspark",
+                    "installedKernelValidated": profile.language.value == "pyspark",
+                    "runtimeValidation": "direct-transport-pyspark",
                     "capabilities": {
-                        "execute": profile.transport
-                        in {TransportKind.FAKE, TransportKind.FABRIC},
-                        "interrupt": profile.transport
-                        in {TransportKind.FAKE, TransportKind.FABRIC},
+                        "execute": True,
+                        "interrupt": True,
                         "shutdown": True,
                         "completion": False,
                         "inspect": False,

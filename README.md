@@ -5,9 +5,8 @@ edit existing Notebooks in place, and work with Lakehouse `Files` through one
 cross-platform Go CLI. Environment definitions and Lakehouse `Tables` remain
 read-only.
 
-An optional Python companion, **`fabric-jupyter`**, provides local Jupyter
-kernels backed by an owner-local broker. Its default fake transport is offline;
-an explicit `fabric` profile enables experimental remote Notebook execution.
+An optional Python companion, **`fabric-jupyter`**, provides a local Jupyter
+kernel backed by an owner-local broker and an explicit Fabric Notebook target.
 
 ## Status
 
@@ -56,9 +55,8 @@ fabric-jupyter install-kernels
 fabric-jupyter runtime-status
 ```
 
-Select a **fabric-jupyter (PySpark; offline fake)** or
-**fabric-jupyter (Python; offline fake)** kernel in your Jupyter client.
-For real execution, configure an opt-in `fabric` profile; see the
+Configure a Fabric PySpark profile with an explicit Workspace and Notebook
+before installing a selectable kernel; see the
 [`fabric-jupyter` guide](docs/JUPYTER.md) for profiles, security boundaries,
 capabilities, and limitations.
 

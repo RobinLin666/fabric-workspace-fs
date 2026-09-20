@@ -3,12 +3,12 @@
 `fabric-jupyter` can connect to a Notebook-bound remote runtime using an
 explicit `fabric` profile. **This is an experimental private-protocol
 integration**, not a supported Microsoft public API contract. Service changes
-can break it. Default profiles remain offline `fake`; no cloud activity occurs
-until a real profile is explicitly selected and started.
+can break it. No Jupyter kernel is installed until a real profile is explicitly
+configured and installed.
 
-Real execution currently supports **PySpark only**. The Fabric Python
-kernelspec remains useful in offline fake mode; a real Python runtime profile
-is rejected before authentication until that protocol is separately validated.
+Real execution currently supports **PySpark only**. A real Python runtime
+profile is rejected before authentication until that protocol is separately
+validated.
 
 ## Authentication and configuration
 
@@ -37,9 +37,11 @@ IDs take precedence over optional mounted Notebook `.fabric.json` discovery.
 The broker snapshots that resolved target at startup: a client cannot change
 its workspace, Notebook, language, transport, Lakehouse, or Environment.
 
-To return to offline operation, configure the profile with `--transport fake`
-and reinstall its kernelspec. `runtime-status` describes implemented
-capabilities without authenticating; it is not evidence of remote readiness.
+To remove a Fabric kernel, delete its kernelspec through Jupyter or replace
+the profile with a non-Fabric test profile and run
+`fabric-jupyter install-kernels --replace`. `runtime-status` describes
+implemented capabilities without authenticating; it is not evidence of remote
+readiness.
 
 ## Lifecycle and supported messages
 
