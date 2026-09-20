@@ -42,10 +42,12 @@ mkdir -p "$HOME/fabric-mount"
 ```
 
 On Windows, build `bin\fabric-workspace-fs.exe` and use an unused drive such as
-`M:` as the mountpoint. The binary runs in the foreground; press Ctrl+C to
-unmount. See the [filesystem guide](docs/FILESYSTEM.md) for platform-specific
-commands, authentication scopes, namespace layout, write semantics, limits,
-and recovery guidance.
+`M:` as the mountpoint. Drive-letter mounts use WinFsp's local network-volume
+mode so native Windows path resolution works in Node.js and desktop file
+explorers without administrator elevation. The binary runs in the foreground;
+press Ctrl+C to unmount. See the [filesystem guide](docs/FILESYSTEM.md) for
+platform-specific commands, authentication scopes, namespace layout, write
+semantics, limits, and recovery guidance.
 
 ### Optional `fabric-jupyter`
 

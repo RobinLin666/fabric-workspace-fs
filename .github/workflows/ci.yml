@@ -126,13 +126,19 @@ jobs:
           cache: pip
           cache-dependency-path: python/pyproject.toml
       - name: Install Python package and quality tools
-        run: python -m pip install --disable-pip-version-check "python[dev]" build
+        working-directory: python
+        run: python -m pip install --disable-pip-version-check ".[dev]" build
       - name: Lint and type-check
         working-directory: python
         run: |
           ruff check .
           mypy src
-      - name: Test mock broker and local Jupyter protocol
+      - name: Test mock broker and local Jupyter protocol on Unix
+        if: runner.os != 'Windows'
+        working-directory: python
+        run: pytest --basetemp=/tmp/fj
+      - name: Test mock broker and local Jupyter protocol on Windows
+        if: runner.os == 'Windows'
         working-directory: python
         run: pytest
       - name: Build package

@@ -138,7 +138,7 @@ func mountFixtureClients(t *testing.T, readonly bool, configure func(*workspacef
 	if err != nil {
 		t.Fatal(err)
 	}
-	server, err = Mount(root, backend, Options{ReadOnly: readonly, Logger: log.New(testLog{t: t}, "", 0)})
+	server, err = mountFixtureServer(root, backend, readonly, log.New(testLog{t: t}, "", 0))
 	if err != nil {
 		t.Fatal("mount failed", err)
 	}
@@ -157,6 +157,21 @@ func mountFixtureClients(t *testing.T, readonly bool, configure func(*workspacef
 		tables:      filepath.Join(workspace, lh+".Lakehouse", "Tables"),
 		environment: filepath.Join(workspace, env+".Environment"), service: service, server: server,
 	}
+}
+
+func mountFixtureServer(root string, backend *workspacefs.FS, readonly bool, logger *log.Logger) (Server, error) {
+	const attempts = 3
+	for attempt := 0; attempt < attempts; attempt++ {
+		server, err := Mount(root, backend, Options{ReadOnly: readonly, Logger: logger})
+		if err == nil || server != nil || !errors.Is(err, syscall.EINTR) {
+			return server, err
+		}
+		if attempt == attempts-1 {
+			return nil, err
+		}
+		time.Sleep(time.Duration(attempt+1) * 25 * time.Millisecond)
+	}
+	panic("unreachable")
 }
 
 func hasMountedTree(reader io.Reader, directory string) (bool, error) {
