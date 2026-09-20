@@ -10,20 +10,26 @@ from fabric_jupyter.models import ExecutionRequest, FabricLanguage, FabricTarget
 from fabric_jupyter.transport import make_transport
 
 
-def test_runtime_status_does_not_claim_cloud_readiness(capsys: pytest.CaptureFixture[str]) -> None:
-    assert main(["runtime-status", "--require-fabric"]) == 2
+def test_runtime_status_reports_installed_pyspark_validation(
+    capsys: pytest.CaptureFixture[str],
+) -> None:
+    assert main(["runtime-status", "--require-fabric"]) == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["remoteFabricSessionSupported"] is False
+    assert report["remoteFabricSessionSupported"] is True
     assert report["remoteCheckPerformed"] is False
     assert report["transports"]["fake"]["executesCode"] is False
+    assert report["transports"]["fabric"]["requiresExplicitTarget"] is True
+    assert report["transports"]["fabric"]["installedKernelValidated"] is True
+    assert report["transports"]["fabric"]["validatedLanguages"] == ["pyspark"]
+    assert report["transports"]["fabric"]["pythonStatus"] == "unavailable-unverified"
     assert report["transports"]["experimental"]["available"] is False
-    assert [blocker["code"] for blocker in report["blockers"]] == ["NOTEBOOK_RUNTIME_CONTRACT"]
+    assert report["blockers"] == []
     assert report["security"]["serverBoundTargetPolicy"] is True
     assert main(["runtime-status"]) == 0
 
 
-def test_fabric_profile_is_rejected_not_silently_simulated() -> None:
-    with pytest.raises(ValueError):
+def test_fabric_profile_without_target_is_rejected_not_silently_simulated() -> None:
+    with pytest.raises(ValueError, match="explicit target"):
         Profile.from_dict({"name": "real", "language": "pyspark", "transport": "fabric"})
 
 
@@ -44,6 +50,19 @@ def test_experimental_transport_cannot_report_success() -> None:
                 pytest.fail("unavailable transport yielded an event")
 
     asyncio.run(attempt())
+
+
+def test_fabric_transport_factory_is_explicit_and_lazy() -> None:
+    target = FabricTarget(
+        "11111111-1111-1111-1111-111111111111",
+        "22222222-2222-2222-2222-222222222222",
+        FabricLanguage.PYSPARK,
+    )
+    with pytest.raises(ValueError, match="explicit target"):
+        make_transport(TransportKind.FABRIC)
+    transport = make_transport(TransportKind.FABRIC, target, 120)
+    assert type(transport).__name__ == "NotebookRuntimeTransport"
+    assert transport.status()["remoteSession"] is False
 
 
 def test_unavailable_broker_cli_fails_before_binding(

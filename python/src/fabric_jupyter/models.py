@@ -16,6 +16,7 @@ class FabricLanguage(StrEnum):
 
 class TransportKind(StrEnum):
     FAKE = "fake"
+    FABRIC = "fabric"
     EXPERIMENTAL = "experimental"
 
 
@@ -29,6 +30,9 @@ class SessionState(StrEnum):
 class EventKind(StrEnum):
     STREAM = "stream"
     RESULT = "result"
+    DISPLAY_DATA = "display_data"
+    UPDATE_DISPLAY_DATA = "update_display_data"
+    CLEAR_OUTPUT = "clear_output"
     ERROR = "error"
     STATUS = "status"
 
@@ -45,9 +49,10 @@ class FabricTarget:
     def __post_init__(self) -> None:
         for name, value in (("workspace_id", self.workspace_id), ("notebook_id", self.notebook_id)):
             try:
-                UUID(value)
+                canonical = str(UUID(value))
             except (TypeError, ValueError) as exc:
                 raise ValueError(f"{name} must be a UUID") from exc
+            object.__setattr__(self, name, canonical)
         if self.display_name is not None and (
             not self.display_name or len(self.display_name) > 256
         ):
@@ -90,6 +95,9 @@ class Profile:
     target: FabricTarget | None = None
     fuse_notebook_path: str | None = None
     idle_timeout_seconds: int = 900
+    startup_timeout_seconds: int = 600
+    execution_timeout_seconds: int = 300
+    request_timeout_seconds: int = 30
 
     def __post_init__(self) -> None:
         allowed_name_characters = "-_abcdefghijklmnopqrstuvwxyz0123456789"
@@ -101,10 +109,31 @@ class Profile:
             raise ValueError("profile name must contain only lowercase letters, digits, '-' or '_'")
         if self.idle_timeout_seconds < 60 or self.idle_timeout_seconds > 86_400:
             raise ValueError("idle_timeout_seconds must be between 60 and 86400")
+        if not 1 <= self.startup_timeout_seconds <= 600:
+            raise ValueError("startup_timeout_seconds must be between 1 and 600")
+        if not 1 <= self.execution_timeout_seconds <= 300:
+            raise ValueError("execution_timeout_seconds must be between 1 and 300")
+        if not 1 <= self.request_timeout_seconds <= 30:
+            raise ValueError("request_timeout_seconds must be between 1 and 30")
         if self.target is not None and self.target.language is not self.language:
             raise ValueError("profile target language must match profile language")
         if self.fuse_notebook_path is not None and not self.fuse_notebook_path:
             raise ValueError("fuse_notebook_path cannot be empty")
+        if (
+            self.transport is TransportKind.FABRIC
+            and self.language is FabricLanguage.PYTHON
+        ):
+            raise ValueError(
+                "real Python runtime is not supported; use PySpark or offline fake"
+            )
+        if (
+            self.transport is TransportKind.FABRIC
+            and self.target is None
+            and self.fuse_notebook_path is None
+        ):
+            raise ValueError(
+                "fabric transport requires an explicit target or fuseNotebookPath"
+            )
 
     def public_dict(self) -> dict[str, Any]:
         result: dict[str, Any] = {
@@ -112,6 +141,9 @@ class Profile:
             "language": self.language.value,
             "transport": self.transport.value,
             "idleTimeoutSeconds": self.idle_timeout_seconds,
+            "startupTimeoutSeconds": self.startup_timeout_seconds,
+            "executionTimeoutSeconds": self.execution_timeout_seconds,
+            "requestTimeoutSeconds": self.request_timeout_seconds,
         }
         if self.target is not None:
             result["target"] = self.target.to_dict()
@@ -128,6 +160,9 @@ class Profile:
             "target",
             "fuseNotebookPath",
             "idleTimeoutSeconds",
+            "startupTimeoutSeconds",
+            "executionTimeoutSeconds",
+            "requestTimeoutSeconds",
         }
         unknown = set(value).difference(allowed)
         if unknown:
@@ -143,6 +178,9 @@ class Profile:
                 if "fuseNotebookPath" in value
                 else None,
                 idle_timeout_seconds=int(value.get("idleTimeoutSeconds", 900)),
+                startup_timeout_seconds=int(value.get("startupTimeoutSeconds", 600)),
+                execution_timeout_seconds=int(value.get("executionTimeoutSeconds", 300)),
+                request_timeout_seconds=int(value.get("requestTimeoutSeconds", 30)),
             )
         except KeyError as exc:
             raise ValueError(f"missing profile field: {exc.args[0]}") from exc
@@ -187,14 +225,18 @@ class BrokerSession:
     transport: TransportKind
     state: SessionState = SessionState.STARTING
     last_used_monotonic: float = field(default=0.0)
+    remote_status: Mapping[str, Any] = field(default_factory=dict)
 
     def public_dict(self) -> dict[str, Any]:
-        return {
+        result: dict[str, Any] = {
             "target": self.target.to_dict(),
             "transport": self.transport.value,
             "state": self.state.value,
-            "remoteSession": False,
+            "remoteSession": self.transport is TransportKind.FABRIC,
         }
+        if self.remote_status:
+            result["remoteStatus"] = redact_mapping(self.remote_status)
+        return result
 
 
 def redact_mapping(value: Mapping[str, Any]) -> dict[str, Any]:

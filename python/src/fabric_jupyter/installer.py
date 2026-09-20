@@ -12,12 +12,17 @@ from .models import Profile, TransportKind
 
 
 def kernel_name(profile: Profile) -> str:
-    return f"fabric-{profile.language.value}"
+    return profile.name
 
 
 def kernel_display_name(profile: Profile) -> str:
     language = "PySpark" if profile.language.value == "pyspark" else "Python"
-    mode = "offline fake" if profile.transport is TransportKind.FAKE else "unavailable"
+    if profile.transport is TransportKind.FAKE:
+        mode = "offline fake"
+    elif profile.transport is TransportKind.FABRIC:
+        mode = "Fabric"
+    else:
+        mode = "unavailable"
     return f"fabric-jupyter ({language}; {mode})"
 
 
@@ -27,10 +32,7 @@ def install_kernels(*, replace: bool = False) -> list[str]:
     profiles = load_profiles()
     manager = KernelSpecManager()
     installed: list[str] = []
-    for profile_name in ("fabric-pyspark", "fabric-python"):
-        profile = profiles.get(profile_name)
-        if profile is None:
-            continue
+    for profile in profiles.values():
         name = kernel_name(profile)
         spec_dir = Path(manager.user_kernel_dir) / name
         if spec_dir.exists() and not replace:
@@ -49,18 +51,40 @@ def install_kernels(*, replace: bool = False) -> list[str]:
             ],
             "display_name": kernel_display_name(profile),
             "language": "python",
+            "interrupt_mode": "message",
             "metadata": {
                 "debugger": False,
                 "fabric_jupyter": {
                     "profile": profile.name,
                     "transport": profile.transport.value,
                     "executionMode": (
-                        "offline-simulation" if profile.transport is TransportKind.FAKE else "unavailable"
+                        "offline-simulation"
+                        if profile.transport is TransportKind.FAKE
+                        else (
+                            "fabric"
+                            if profile.transport is TransportKind.FABRIC
+                            else "unavailable"
+                        )
                     ),
-                    "remoteFabricSessionSupported": False,
+                    "remoteFabricSessionSupported": (
+                        profile.transport is TransportKind.FABRIC
+                        and profile.language.value == "pyspark"
+                    ),
+                    "installedKernelValidated": (
+                        profile.transport is TransportKind.FABRIC
+                        and profile.language.value == "pyspark"
+                    ),
+                    "runtimeValidation": (
+                        "direct-transport-pyspark"
+                        if profile.transport is TransportKind.FABRIC
+                        and profile.language.value == "pyspark"
+                        else "not-applicable"
+                    ),
                     "capabilities": {
-                        "execute": profile.transport is TransportKind.FAKE,
-                        "interrupt": profile.transport is TransportKind.FAKE,
+                        "execute": profile.transport
+                        in {TransportKind.FAKE, TransportKind.FABRIC},
+                        "interrupt": profile.transport
+                        in {TransportKind.FAKE, TransportKind.FABRIC},
                         "shutdown": True,
                         "completion": False,
                         "inspect": False,

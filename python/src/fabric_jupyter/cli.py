@@ -9,10 +9,11 @@ import sys
 from pathlib import Path
 
 from .broker import BrokerClient, BrokerServer, load_endpoint
-from .config import inspect_profiles, load_profiles
+from .config import inspect_profiles, load_profiles, write_profiles
 from .installer import install_kernels
 from .kernel import launch_kernel
-from .models import redact_mapping
+from .models import FabricLanguage, FabricTarget, Profile, TransportKind, redact_mapping
+from .paths import profiles_path
 from .readiness import runtime_status
 
 
@@ -38,12 +39,26 @@ def _parser() -> argparse.ArgumentParser:
     profile_subcommands = profile.add_subparsers(dest="profile_command", required=True)
     show = profile_subcommands.add_parser("show", help="show credential-redacted profiles")
     show.add_argument("--config", type=Path)
+    configure = profile_subcommands.add_parser(
+        "configure", help="create or update an owner-private credential-free profile"
+    )
+    configure.add_argument("--config", type=Path)
+    configure.add_argument("--name", required=True)
+    configure.add_argument("--transport", required=True, choices=[kind.value for kind in TransportKind])
+    configure.add_argument("--language", choices=[language.value for language in FabricLanguage])
+    configure.add_argument("--workspace")
+    configure.add_argument("--notebook")
+    configure.add_argument("--fuse-notebook-path")
+    configure.add_argument("--idle-timeout", type=int)
+    configure.add_argument("--startup-timeout", type=int)
+    configure.add_argument("--execution-timeout", type=int)
+    configure.add_argument("--request-timeout", type=int)
     status = subcommands.add_parser(
         "broker-status", help="show broker session state without credentials"
     )
     status.add_argument("--endpoint", type=Path)
     readiness = subcommands.add_parser(
-        "runtime-status", help="report offline capabilities; not a Fabric connection check"
+        "runtime-status", help="report local capabilities; not a Fabric connection check"
     )
     readiness.add_argument(
         "--require-fabric", action="store_true",
@@ -79,12 +94,62 @@ async def _broker_status(endpoint: Path | None) -> int:
     return 0
 
 
+def _configure_profile(args: argparse.Namespace) -> Path:
+    location = args.config or profiles_path()
+    has_saved_config = location.exists()
+    profiles = load_profiles(args.config)
+    existing = profiles.get(args.name)
+    if args.language is not None:
+        language = FabricLanguage(args.language)
+    elif existing is not None:
+        language = existing.language
+    elif args.name.endswith("pyspark"):
+        language = FabricLanguage.PYSPARK
+    else:
+        language = FabricLanguage.PYTHON
+    if (args.workspace is None) != (args.notebook is None):
+        raise ValueError("--workspace and --notebook must be supplied together")
+    if args.workspace is not None:
+        target = FabricTarget(args.workspace, args.notebook, language)
+    elif has_saved_config and existing is not None and existing.target is not None:
+        target = existing.target
+    else:
+        target = None
+    fuse_path = (
+        args.fuse_notebook_path
+        if args.fuse_notebook_path is not None
+        else (existing.fuse_notebook_path if existing is not None else None)
+    )
+    profile = Profile(
+        name=args.name,
+        language=language,
+        transport=TransportKind(args.transport),
+        target=target,
+        fuse_notebook_path=fuse_path,
+        idle_timeout_seconds=args.idle_timeout
+        if args.idle_timeout is not None
+        else (existing.idle_timeout_seconds if existing is not None else 900),
+        startup_timeout_seconds=args.startup_timeout
+        if args.startup_timeout is not None
+        else (existing.startup_timeout_seconds if existing is not None else 600),
+        execution_timeout_seconds=args.execution_timeout
+        if args.execution_timeout is not None
+        else (existing.execution_timeout_seconds if existing is not None else 300),
+        request_timeout_seconds=args.request_timeout
+        if args.request_timeout is not None
+        else (existing.request_timeout_seconds if existing is not None else 30),
+    )
+    profiles[profile.name] = profile
+    return write_profiles(profiles, location)
+
+
 def main(argv: list[str] | None = None) -> int:
     args = _parser().parse_args(argv)
     try:
         if args.command == "runtime-status":
-            print(json.dumps(runtime_status(), indent=2, sort_keys=True))
-            return 2 if args.require_fabric else 0
+            status = runtime_status()
+            print(json.dumps(status, indent=2, sort_keys=True))
+            return 2 if args.require_fabric and not status["remoteFabricSessionSupported"] else 0
         if args.command == "install-kernels":
             print(json.dumps({"installed": install_kernels(replace=args.replace)}, sort_keys=True))
             return 0
@@ -95,6 +160,17 @@ def main(argv: list[str] | None = None) -> int:
             return asyncio.run(_serve_broker(args.idle_timeout, args.profile))
         if args.command == "profile" and args.profile_command == "show":
             print(json.dumps(inspect_profiles(args.config), indent=2, sort_keys=True))
+            return 0
+        if args.command == "profile" and args.profile_command == "configure":
+            location = _configure_profile(args)
+            configured = load_profiles(location)[args.name]
+            print(
+                json.dumps(
+                    {"path": str(location), "profile": redact_mapping(configured.public_dict())},
+                    indent=2,
+                    sort_keys=True,
+                )
+            )
             return 0
         if args.command == "broker-status":
             return asyncio.run(_broker_status(args.endpoint))

@@ -14,7 +14,7 @@ from ipykernel.kernelapp import IPKernelApp
 from . import __version__
 from .broker import BrokerClient, BrokerServer, load_endpoint
 from .config import load_profiles
-from .models import EventKind, FabricTarget, Profile, TransportKind
+from .models import EventKind, FabricTarget, Profile
 from .targets import resolve_target
 
 
@@ -29,7 +29,7 @@ class FabricKernel(IPythonKernel):
         "file_extension": ".py",
         "pygments_lexer": "python",
     }
-    banner = "fabric-jupyter local protocol adapter: no real Fabric runtime in this release"
+    banner = "fabric-jupyter local broker adapter"
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__(**kwargs)
@@ -40,12 +40,18 @@ class FabricKernel(IPythonKernel):
         self._embedded_broker: BrokerServer | None = None
         self._embedded_broker_loop: asyncio.AbstractEventLoop | None = None
         self._startup_error: str | None = None
+        self._connection_error: str | None = None
         try:
             profile = load_profiles().get(name)
             if profile is None:
                 raise RuntimeError(f"unknown fabric-jupyter profile: {name}")
             self._profile = profile
             self._target = resolve_target(profile)
+            self.banner = (
+                "fabric-jupyter offline simulation; no local code is evaluated"
+                if profile.transport.value == "fake"
+                else "fabric-jupyter opt-in Fabric notebook runtime"
+            )
         except (OSError, RuntimeError, ValueError) as exc:
             self._startup_error = _diagnostic("startup configuration failed", exc)
 
@@ -54,11 +60,6 @@ class FabricKernel(IPythonKernel):
             raise RuntimeError(self._startup_error)
         if self._profile is None or self._target is None:
             raise RuntimeError("fabric-jupyter startup did not produce a runnable profile")
-        if self._profile.transport is not TransportKind.FAKE:
-            raise RuntimeError(
-                "real Fabric transport is unavailable; no credential or session operation "
-                "was attempted. Run `fabric-jupyter runtime-status --require-fabric`"
-            )
         if self._client is not None:
             return self._client
         try:
@@ -76,6 +77,32 @@ class FabricKernel(IPythonKernel):
         except (OSError, RuntimeError, ValueError) as exc:
             raise RuntimeError(_diagnostic("broker endpoint is not usable", exc)) from exc
 
+    async def _connect_profile(self) -> BrokerClient:
+        client = await self._broker_client()
+        if self._profile is None or self._target is None:
+            raise RuntimeError("fabric-jupyter startup did not produce a runnable profile")
+        await client.connect(self._target, self._profile.transport)
+        self._connection_error = None
+        return client
+
+    async def kernel_info_request(
+        self, stream: Any, ident: Any, parent: dict[str, Any]
+    ) -> None:
+        if not self.session:
+            return
+        try:
+            await self._connect_profile()
+        except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+            self._connection_error = _diagnostic("Fabric connection failed", exc)
+        content: dict[str, Any] = {"status": "ok"}
+        content.update(self.kernel_info)
+        if self._connection_error is not None:
+            content["status"] = "error"
+            content["ename"] = "FabricConnectionError"
+            content["evalue"] = self._connection_error
+            content["banner"] = f"{content['banner']}\n\n{self._connection_error}"
+        self.session.send(stream, "kernel_info_reply", content, parent, ident)
+
     async def do_execute(
         self,
         code: str,
@@ -88,46 +115,48 @@ class FabricKernel(IPythonKernel):
         cell_id: str | None = None,
     ) -> dict[str, Any]:
         del store_history, user_expressions, allow_stdin, cell_meta, cell_id
+        error_payload: dict[str, Any] | None = None
         try:
-            client = await self._broker_client()
+            client = await self._connect_profile()
             if self._profile is None or self._target is None:
                 raise RuntimeError("fabric-jupyter startup did not produce a runnable profile")
-            events = await client.execute(
+            async for event in client.stream_execute(
                 request_id=str(uuid4()),
                 target=self._target,
                 code=code,
                 silent=silent,
                 transport=self._profile.transport,
-            )
-        except (OSError, RuntimeError, ValueError) as exc:
-            self.send_response(
-                self.iopub_socket,
-                "error",
-                {
-                    "ename": type(exc).__name__,
-                    "evalue": str(exc),
-                    "traceback": [str(exc)],
-                },
-            )
-            return {
-                "status": "error",
+            ):
+                if event.kind is EventKind.STREAM and not silent:
+                    stream_content = cast(dict[str, Any], dict(event.content))
+                    self.send_response(self.iopub_socket, "stream", stream_content)
+                elif event.kind is EventKind.RESULT and not silent:
+                    result_content = cast(dict[str, Any], dict(event.content))
+                    self.send_response(self.iopub_socket, "execute_result", result_content)
+                elif event.kind is EventKind.DISPLAY_DATA and not silent:
+                    display_content = cast(dict[str, Any], dict(event.content))
+                    self.send_response(self.iopub_socket, "display_data", display_content)
+                elif event.kind is EventKind.UPDATE_DISPLAY_DATA and not silent:
+                    update_content = cast(dict[str, Any], dict(event.content))
+                    self.send_response(self.iopub_socket, "update_display_data", update_content)
+                elif event.kind is EventKind.CLEAR_OUTPUT and not silent:
+                    clear_content = cast(dict[str, Any], dict(event.content))
+                    self.send_response(self.iopub_socket, "clear_output", clear_content)
+                elif event.kind is EventKind.ERROR:
+                    content = cast(dict[str, Any], dict(event.content))
+                    self.send_response(self.iopub_socket, "error", content)
+                    error_payload = {"status": "error"}
+                    error_payload.update(content)
+        except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+            content = {
                 "ename": type(exc).__name__,
                 "evalue": str(exc),
                 "traceback": [str(exc)],
             }
-        for event in events:
-            if event.kind is EventKind.STREAM and not silent:
-                stream_content = cast(dict[str, Any], dict(event.content))
-                self.send_response(self.iopub_socket, "stream", stream_content)
-            elif event.kind is EventKind.RESULT and not silent:
-                result_content = cast(dict[str, Any], dict(event.content))
-                self.send_response(self.iopub_socket, "execute_result", result_content)
-            elif event.kind is EventKind.ERROR:
-                content = cast(dict[str, Any], dict(event.content))
-                self.send_response(self.iopub_socket, "error", content)
-                error_payload: dict[str, object] = {"status": "error"}
-                error_payload.update(content)
-                return error_payload
+            self.send_response(self.iopub_socket, "error", content)
+            return {"status": "error", **content}
+        if error_payload is not None:
+            return error_payload
         return {
             "status": "ok",
             "execution_count": self.execution_count,
@@ -137,7 +166,7 @@ class FabricKernel(IPythonKernel):
 
     async def do_interrupt(self) -> dict[str, Any]:
         try:
-            client = await self._broker_client()
+            client = await self._connect_profile()
             if self._target is None:
                 raise RuntimeError("fabric-jupyter startup did not produce a runnable target")
             await client.interrupt(self._target)
@@ -145,14 +174,52 @@ class FabricKernel(IPythonKernel):
         except (OSError, RuntimeError, ValueError) as exc:
             return {"status": "error", "ename": type(exc).__name__, "evalue": str(exc)}
 
+    async def interrupt_request(self, stream: Any, ident: Any, parent: dict[str, Any]) -> None:
+        if self.session is not None:
+            content = await self.do_interrupt()
+            self.session.send(stream, "interrupt_reply", content, parent, ident=ident)
+
     async def do_shutdown(self, restart: bool) -> dict[str, Any]:
-        if not restart:
+        failure: BaseException | None = None
+        if self._client is not None or self._embedded_broker is not None:
             try:
                 if self._client is not None and self._target is not None:
                     await self._client.shutdown(self._target)
+            except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+                failure = exc
             finally:
-                await self._close_embedded_broker()
+                try:
+                    await self._close_embedded_broker()
+                except (OSError, RuntimeError, TimeoutError, ValueError) as exc:
+                    failure = failure or exc
+        if failure is not None:
+            return {
+                "status": "error",
+                "restart": restart,
+                "ename": type(failure).__name__,
+                "evalue": str(failure),
+            }
         return {"status": "ok", "restart": restart}
+
+    async def do_complete(self, code: str, cursor_pos: int) -> dict[str, Any]:
+        del code
+        return {
+            "status": "ok",
+            "matches": [],
+            "cursor_start": cursor_pos,
+            "cursor_end": cursor_pos,
+            "metadata": {},
+        }
+
+    async def do_inspect(
+        self,
+        code: str,
+        cursor_pos: int,
+        detail_level: int = 0,
+        omit_sections: tuple[str, ...] = (),
+    ) -> dict[str, Any]:
+        del code, cursor_pos, detail_level, omit_sections
+        return {"status": "ok", "found": False, "data": {}, "metadata": {}}
 
     async def _close_embedded_broker(self) -> None:
         broker = self._embedded_broker
@@ -171,7 +238,8 @@ class FabricKernel(IPythonKernel):
             return
         if broker_loop.is_closed():
             return
-        broker_loop.call_soon_threadsafe(lambda: broker_loop.create_task(broker.close()))
+        future = asyncio.run_coroutine_threadsafe(broker.close(), broker_loop)
+        await asyncio.wrap_future(future)
 
 
 def _diagnostic(context: str, exc: BaseException) -> str:

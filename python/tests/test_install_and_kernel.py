@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import asyncio
 import json
 import os
 import subprocess
@@ -7,13 +8,23 @@ import sys
 import time
 from contextlib import suppress
 from pathlib import Path
+from unittest.mock import AsyncMock, MagicMock
 
 from jupyter_client import KernelManager
 from jupyter_client.kernelspec import KernelSpecManager
 
+from fabric_jupyter.broker import BrokerClient, load_endpoint
 from fabric_jupyter.config import write_profiles
 from fabric_jupyter.installer import install_kernels
-from fabric_jupyter.models import FabricLanguage, FabricTarget, Profile
+from fabric_jupyter.kernel import FabricKernel
+from fabric_jupyter.models import (
+    EventKind,
+    ExecutionEvent,
+    FabricLanguage,
+    FabricTarget,
+    Profile,
+    TransportKind,
+)
 from fabric_jupyter.paths import broker_endpoint_path
 
 WORKSPACE = "11111111-1111-1111-1111-111111111111"
@@ -45,10 +56,30 @@ def test_user_kernelspec_install(local_state: Path, monkeypatch) -> None:
     spec = json.loads((kernels / "fabric-pyspark" / "kernel.json").read_text())
     assert spec["argv"][2:4] == ["fabric_jupyter", "kernel"]
     assert spec["argv"][4:6] == ["-f", "{connection_file}"]
+    assert spec["interrupt_mode"] == "message"
     assert spec["display_name"] == "fabric-jupyter (PySpark; offline fake)"
     assert spec["metadata"]["fabric_jupyter"]["remoteFabricSessionSupported"] is False
     assert spec["metadata"]["fabric_jupyter"]["executionMode"] == "offline-simulation"
     assert spec["metadata"]["fabric_jupyter"]["capabilities"]["widgets"] is False
+
+
+def test_fabric_kernelspec_marks_pyspark_as_live_validated(
+    local_state: Path, monkeypatch
+) -> None:
+    target = FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYSPARK)
+    pyspark = Profile(
+        name="real-pyspark",
+        language=FabricLanguage.PYSPARK,
+        transport=TransportKind.FABRIC,
+        target=target,
+    )
+    write_profiles({pyspark.name: pyspark})
+    monkeypatch.setenv("JUPYTER_DATA_DIR", str(local_state / "jupyter"))
+    install_kernels()
+    kernels = local_state / "jupyter" / "kernels"
+    pyspark_spec = json.loads((kernels / "real-pyspark" / "kernel.json").read_text())
+    assert pyspark_spec["metadata"]["fabric_jupyter"]["installedKernelValidated"] is True
+    assert pyspark_spec["metadata"]["fabric_jupyter"]["remoteFabricSessionSupported"] is True
 
 
 def test_generated_default_kernelspec_starts_without_profile_or_broker(
@@ -69,6 +100,13 @@ def test_generated_default_kernelspec_starts_without_profile_or_broker(
         client = manager.client()
         client.start_channels()
         client.wait_for_ready(timeout=15)
+        marker = local_state / "completion-must-not-execute"
+        expression = f"__import__('pathlib').Path({str(marker)!r}).write_text('bad')"
+        completion_id = client.complete(expression)
+        assert _get_shell_reply(client, completion_id)["content"]["matches"] == []
+        inspect_id = client.inspect(expression)
+        assert _get_shell_reply(client, inspect_id)["content"]["found"] is False
+        assert not marker.exists()
         message_id = client.execute("print('not evaluated')")
         shell_reply = _get_shell_reply(client, message_id)
         assert shell_reply["content"]["status"] == "ok"
@@ -187,6 +225,8 @@ def test_real_jupyter_client_with_fake_broker(
         client = manager.client()
         client.start_channels()
         client.wait_for_ready(timeout=15)
+        sessions = asyncio.run(BrokerClient(load_endpoint()).status())
+        assert len(sessions) == 1
         message_id = client.execute("print('not evaluated')")
         messages: list[dict] = []
         while True:
@@ -209,3 +249,41 @@ def test_real_jupyter_client_with_fake_broker(
         broker.terminate()
         with suppress(subprocess.TimeoutExpired):
             broker.wait(timeout=10)
+
+
+def test_kernel_passes_through_display_updates_without_buffering() -> None:
+    async def run() -> None:
+        target = FabricTarget(WORKSPACE, NOTEBOOK, FabricLanguage.PYSPARK)
+
+        class Client:
+            async def stream_execute(self, **kwargs):
+                assert kwargs["transport"] is TransportKind.FABRIC
+                yield ExecutionEvent(
+                    EventKind.DISPLAY_DATA,
+                    {"data": {"text/plain": "initial"}, "transient": {"display_id": "one"}},
+                )
+                yield ExecutionEvent(
+                    EventKind.UPDATE_DISPLAY_DATA,
+                    {"data": {"text/plain": "updated"}, "transient": {"display_id": "one"}},
+                )
+                yield ExecutionEvent(EventKind.CLEAR_OUTPUT, {"wait": True})
+
+        kernel = FabricKernel()
+        kernel._profile = Profile(
+            name="real",
+            language=FabricLanguage.PYSPARK,
+            transport=TransportKind.FABRIC,
+            target=target,
+        )
+        kernel._target = target
+        kernel._connect_profile = AsyncMock(return_value=Client())
+        kernel.send_response = MagicMock()
+        kernel.iopub_socket = object()
+        kernel.execution_count = 1
+        reply = await kernel.do_execute("display", silent=False)
+        assert reply["status"] == "ok"
+        assert [
+            call.args[1] for call in kernel.send_response.call_args_list
+        ] == ["display_data", "update_display_data", "clear_output"]
+
+    asyncio.run(run())

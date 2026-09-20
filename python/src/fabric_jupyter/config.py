@@ -3,13 +3,13 @@
 from __future__ import annotations
 
 import json
-import os
+import secrets
 from collections.abc import Mapping
 from pathlib import Path
 from typing import Any
 
 from .models import FabricLanguage, FabricTarget, Profile, redact_mapping
-from .paths import profiles_path
+from .paths import profiles_path, secure_private_file, verify_private_file
 
 _MAX_CONFIG_BYTES = 1_048_576
 
@@ -17,6 +17,7 @@ _MAX_CONFIG_BYTES = 1_048_576
 def _read_json(path: Path) -> Mapping[str, Any]:
     if path.is_symlink():
         raise ValueError("profile configuration must not be a symlink")
+    verify_private_file(path)
     data = path.read_bytes()
     if len(data) > _MAX_CONFIG_BYTES:
         raise ValueError("profile configuration exceeds 1 MiB")
@@ -87,18 +88,16 @@ def inspect_profiles(path: Path | None = None) -> dict[str, Any]:
 
 def write_profiles(profiles: Mapping[str, Profile], path: Path | None = None) -> Path:
     location = path or profiles_path()
-    location.parent.mkdir(parents=True, exist_ok=True)
+    if location.exists():
+        verify_private_file(location)
     payload = json.dumps(
         {"profiles": [profile.public_dict() for profile in profiles.values()]},
         indent=2,
         sort_keys=True,
-    ).encode("utf-8")
-    temporary = location.with_suffix(".tmp")
-    with open(temporary, "xb") as stream:
-        if os.name != "nt":
-            os.chmod(temporary, 0o600)
+    )
+    temporary = location.with_name(f".{location.name}.{secrets.token_hex(6)}.tmp")
+    with secure_private_file(temporary) as stream:
         stream.write(payload)
     temporary.replace(location)
-    if os.name != "nt":
-        location.chmod(0o600)
+    verify_private_file(location)
     return location

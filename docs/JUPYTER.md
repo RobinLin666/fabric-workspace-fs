@@ -32,8 +32,9 @@ Select **fabric-jupyter (PySpark; offline fake)** or
 broker accepts only its startup profile's resolved target/language/transport;
 a Python kernel cannot use a PySpark-bound broker. Prefer the default private
 per-kernel brokers when using both languages. Stop the foreground broker before
-changing profiles. Non-fake broker startup fails before binding a listener;
-a non-fake kernel remains alive to report an explicit execution error.
+changing profiles. A `fabric` profile is explicit authorization to connect to
+the configured Notebook. The legacy `experimental` placeholder still fails
+before acquiring credentials.
 
 The distribution and command are both named `fabric-jupyter`. The importable
 Python module remains `fabric_jupyter` because Python package names cannot use
@@ -44,9 +45,10 @@ Run `fabric-jupyter install-kernels --replace` after an upgrade.
 
 ## Real Fabric Runtime status
 
-**This release cannot create or attach a real Fabric Notebook runtime.**
-Local heartbeat, `kernel_info`, and deterministic fake replies prove only the
-local Jupyter protocol adapter, not a cloud connection or Spark readiness.
+**Real Notebook execution is opt-in and uses a private, experimental protocol.**
+Local heartbeat and deterministic fake replies prove only the local Jupyter
+adapter. A `fabric` profile starts an owned remote session, performs remote
+`kernel_info`, and waits for compute readiness before execution.
 
 ```sh
 fabric-jupyter runtime-status
@@ -54,12 +56,11 @@ fabric-jupyter runtime-status --require-fabric
 ```
 
 Both commands report offline capabilities without authenticating or contacting
-Fabric; the second exits **2** while real sessions are unavailable. The status
-includes `remoteFabricSessionSupported: false` and `remoteCheckPerformed: false`.
-There is no usable `transport: fabric` configuration; unknown transports are
-rejected and `experimental` fails closed. Do not add tokens to kernelspecs or
-profiles. See [runtime prerequisites](JUPYTER_RUNTIME.md) for the specific
-protocol gap and the distinction from the documented Lakehouse Livy API.
+Fabric. They do not prove that credentials, capacity or a configured Notebook
+are usable. Unknown transports are rejected and `experimental` fails closed.
+Do not add tokens to kernelspecs or profiles. See the
+[runtime guide](JUPYTER_RUNTIME.md) for configuration, lifecycle, protocol
+limitations, and the distinction from the documented Lakehouse Livy API.
 
 ## Profiles and target resolution
 
@@ -78,7 +79,8 @@ A target is resolved in this order:
 
 The generated default profiles include fixed local fake targets so a fresh
 install has no hidden mount or Fabric identity prerequisite. Replace those
-targets only for local tests; configuring real IDs does not enable cloud execution.
+targets only for local tests. Use an explicit `fabric` profile to opt into real
+execution; merely replacing IDs in a fake profile does not enable it.
 
 Resolution does not grant execution authority. The broker resolves its own
 startup profile once, stores an immutable target policy, and never accepts
@@ -157,15 +159,15 @@ interrupt, and shutdown semantics to the broker. The bundled `fake` transport
 is the default and never evaluates code or contacts Fabric; it exists for
 deterministic local and Jupyter protocol tests.
 
-`experimental` is intentionally inert. It does **not** guess a private
-Fabric endpoint, hardcode a tenant/region, acquire credentials, create a
-remote session, or execute code. A real Fabric execution transport requires a
-separately reviewed and explicitly configured implementation plus separate
-runtime authorization.
+`experimental` is intentionally inert. `fabric` is a separate, opt-in
+implementation with target-bound workload discovery, in-memory Azure CLI
+credentials and bounded REST/WebSocket operations. It does not silently fall
+back to fake results. Only owned runtime sessions are stopped/deleted.
 
 Current capability metadata truthfully reports no completion, inspect,
 widgets, rich comms, stdin prompts, or debugger integration. Notebook
-execution history, access tokens, and session IDs are not persisted. Session
+local execution history, access tokens, and session IDs are not persisted.
+The remote service may keep history. Session
 reuse only exists while the broker process is running; idle sessions are
 released after the configured timeout.
 

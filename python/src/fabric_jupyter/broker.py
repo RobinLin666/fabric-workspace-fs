@@ -8,7 +8,7 @@ import json
 import os
 import secrets
 import time
-from collections.abc import Awaitable, Mapping
+from collections.abc import AsyncIterator, Awaitable, Mapping
 from contextlib import suppress
 from dataclasses import dataclass, replace
 from pathlib import Path
@@ -23,6 +23,7 @@ from .models import (
     Profile,
     SessionState,
     TransportKind,
+    redact_mapping,
 )
 from .paths import (
     broker_endpoint_path,
@@ -91,19 +92,40 @@ class BrokerServer:
         profile: Profile | None = None,
     ) -> None:
         self._profile = profile or default_profiles()["fabric-pyspark"]
-        if self._profile.transport is not TransportKind.FAKE:
+        if self._profile.transport is TransportKind.EXPERIMENTAL:
             raise ValueError(
-                "real Fabric transport is unavailable; broker will not start. "
-                "Run `fabric-jupyter runtime-status --require-fabric`"
+                "experimental transport is unavailable; broker will not start"
             )
         self._target = resolve_target(self._profile)
-        self._transport = transport or make_transport(TransportKind.FAKE)
+        self._transport_override = transport
+        self._transport: FabricTransport | None = transport
+        if self._transport is None:
+            self._transport = self._new_transport()
         self._idle_timeout_seconds = idle_timeout_seconds
         self._endpoint = endpoint
         self._server: asyncio.AbstractServer | None = None
         self._sessions: dict[tuple[str, str, str], BrokerSession] = {}
         self._cleanup_task: asyncio.Task[None] | None = None
         self._endpoint_file: Path | None = None
+
+    def _new_transport(self) -> FabricTransport:
+        return make_transport(
+            self._profile.transport,
+            self._target,
+            self._profile.idle_timeout_seconds,
+        )
+
+    def _active_transport(self) -> FabricTransport:
+        if self._transport is None:
+            self._transport = self._new_transport()
+        return self._transport
+
+    def _discard_terminal_transport(self) -> None:
+        if (
+            self._profile.transport is TransportKind.FABRIC
+            and self._transport_override is None
+        ):
+            self._transport = None
 
     def _authorize_target(self, target: FabricTarget) -> FabricTarget:
         if (
@@ -186,15 +208,29 @@ class BrokerServer:
         return location
 
     async def close(self) -> None:
+        shutdown_failure: BaseException | None = None
         if self._cleanup_task is not None:
             self._cleanup_task.cancel()
-            with suppress(asyncio.CancelledError):
+            try:
                 await self._cleanup_task
+            except asyncio.CancelledError:
+                pass
+            except (RuntimeError, TimeoutError) as exc:
+                if self._profile.transport is TransportKind.FABRIC:
+                    shutdown_failure = exc
             self._cleanup_task = None
         for session in list(self._sessions.values()):
-            with suppress(RuntimeError):
-                await self._transport.shutdown(session.target)
-            session.state = SessionState.STOPPED
+            try:
+                async with asyncio.timeout(180):
+                    await self._active_transport().shutdown(session.target)
+            except (RuntimeError, TimeoutError) as exc:
+                if (
+                    self._profile.transport is TransportKind.FABRIC
+                    and shutdown_failure is None
+                ):
+                    shutdown_failure = exc
+            else:
+                session.state = SessionState.STOPPED
         self._sessions.clear()
         if self._server is not None:
             self._server.close()
@@ -209,10 +245,14 @@ class BrokerServer:
                 if hmac.compare_digest(recorded.auth, self.endpoint.auth):
                     self._endpoint_file.unlink()
             self._endpoint_file = None
+        if shutdown_failure is not None:
+            raise shutdown_failure
 
     async def _handle(self, reader: asyncio.StreamReader, writer: asyncio.StreamWriter) -> None:
         try:
-            raw = await asyncio.wait_for(reader.readline(), timeout=30)
+            raw = await asyncio.wait_for(
+                reader.readline(), timeout=self._profile.request_timeout_seconds
+            )
             message = decode_message(raw)
             provided_auth = message.get("auth")
             if not isinstance(provided_auth, str) or not hmac.compare_digest(
@@ -221,7 +261,9 @@ class BrokerServer:
                 await self._send_error(writer, "unauthorized")
                 return
             method, params = request_from_message(message)
-            if method == "execute":
+            if method == "connect":
+                await self._connect_transport(params, writer)
+            elif method == "execute":
                 await self._execute(params, writer)
             elif method == "interrupt":
                 await self._interrupt(params, writer)
@@ -242,6 +284,39 @@ class BrokerServer:
             with suppress(Exception):
                 await writer.wait_closed()
 
+    async def _connect_transport(
+        self, params: Mapping[str, Any], writer: asyncio.StreamWriter
+    ) -> None:
+        target, transport_kind = self._bound_request(params, method="connect")
+        key = self._session_key(target)
+        session = self._sessions.get(key)
+        if session is None:
+            session = BrokerSession(target=target, transport=transport_kind)
+            self._sessions[key] = session
+        if session.transport is not transport_kind:
+            raise ValueError("target already has a session with a different transport")
+        if session.state is SessionState.STOPPED:
+            raise RuntimeError(
+                "previous Fabric shutdown was not verified; restart the kernel or broker"
+            )
+        if session.state is SessionState.STARTING:
+            try:
+                async with asyncio.timeout(self._profile.startup_timeout_seconds):
+                    status = await self._active_transport().start()
+            except TimeoutError as exc:
+                session.state = SessionState.STOPPED
+                raise RuntimeError("Fabric transport startup timed out") from exc
+            except (OSError, RuntimeError, ValueError):
+                session.state = SessionState.STOPPED
+                raise
+            if not isinstance(status, Mapping):
+                self._sessions.pop(key, None)
+                raise RuntimeError("Fabric transport returned invalid startup status")
+            session.remote_status = redact_mapping(status)
+            session.state = SessionState.IDLE
+        session.last_used_monotonic = time.monotonic()
+        await self._send(writer, {"session": session.public_dict()})
+
     async def _execute(self, params: Mapping[str, Any], writer: asyncio.StreamWriter) -> None:
         request = parse_execute(params)
         transport_kind = TransportKind(str(params.get("transport", "fake")))
@@ -255,6 +330,8 @@ class BrokerServer:
         )
         session = self._sessions.get(key)
         if session is None:
+            if transport_kind is TransportKind.FABRIC:
+                raise RuntimeError("fabric session is not connected; call connect first")
             session = BrokerSession(target=request.target, transport=transport_kind)
             self._sessions[key] = session
         if session.transport is not transport_kind:
@@ -265,9 +342,11 @@ class BrokerServer:
             writer, event_message(ExecutionEvent(EventKind.STATUS, {"execution_state": "busy"}))
         )
         try:
-            async for event in self._transport.execute(request):
-                await self._send(writer, event_message(event))
-        except RuntimeError as exc:
+            async with asyncio.timeout(self._profile.execution_timeout_seconds):
+                async for event in self._active_transport().execute(request):
+                    await self._send(writer, event_message(event))
+        except (RuntimeError, TimeoutError) as exc:
+            message = "Fabric execution timed out" if isinstance(exc, TimeoutError) else str(exc)
             await self._send(
                 writer,
                 event_message(
@@ -275,8 +354,8 @@ class BrokerServer:
                         EventKind.ERROR,
                         {
                             "ename": "FabricTransportError",
-                            "evalue": str(exc),
-                            "traceback": [str(exc)],
+                            "evalue": message,
+                            "traceback": [message],
                         },
                     )
                 ),
@@ -291,19 +370,34 @@ class BrokerServer:
 
     async def _interrupt(self, params: Mapping[str, Any], writer: asyncio.StreamWriter) -> None:
         target = self._authorize_target(_target_from_params(params))
-        await self._transport.interrupt(target)
+        async with asyncio.timeout(180):
+            await self._active_transport().interrupt(target)
         await self._send(writer, {"ok": True})
 
     async def _shutdown(self, params: Mapping[str, Any], writer: asyncio.StreamWriter) -> None:
         target = self._authorize_target(_target_from_params(params))
         key = (target.workspace_id, target.notebook_id, target.language.value)
-        session = self._sessions.pop(key, None)
+        session = self._sessions.get(key)
         if session is not None:
-            await self._transport.shutdown(target)
-            session.state = SessionState.STOPPED
+            try:
+                async with asyncio.timeout(180):
+                    await self._active_transport().shutdown(target)
+            except (RuntimeError, TimeoutError):
+                session.state = SessionState.STOPPED
+                raise
+            else:
+                session.state = SessionState.STOPPED
+                del self._sessions[key]
+                self._discard_terminal_transport()
         await self._send(writer, {"ok": True})
 
     async def _status(self, writer: asyncio.StreamWriter) -> None:
+        for session in self._sessions.values():
+            if session.transport is TransportKind.FABRIC:
+                status = self._active_transport().status()
+                if not isinstance(status, Mapping):
+                    raise RuntimeError("Fabric transport returned invalid status")
+                session.remote_status = redact_mapping(status)
         await self._send(
             writer, {"sessions": [session.public_dict() for session in self._sessions.values()]}
         )
@@ -314,9 +408,34 @@ class BrokerServer:
             deadline = time.monotonic() - self._idle_timeout_seconds
             for key, session in list(self._sessions.items()):
                 if session.state is SessionState.IDLE and session.last_used_monotonic < deadline:
-                    await self._transport.shutdown(session.target)
-                    session.state = SessionState.STOPPED
-                    del self._sessions[key]
+                    try:
+                        async with asyncio.timeout(60):
+                            await self._active_transport().shutdown(session.target)
+                    except (RuntimeError, TimeoutError):
+                        session.state = SessionState.STOPPED
+                        raise
+                    else:
+                        session.state = SessionState.STOPPED
+                        del self._sessions[key]
+                        self._discard_terminal_transport()
+
+    def _bound_request(
+        self, params: Mapping[str, Any], *, method: str
+    ) -> tuple[FabricTarget, TransportKind]:
+        if set(params) != {"target", "transport"}:
+            raise ValueError(f"{method} requires only target and transport parameters")
+        target_value = params.get("target")
+        if not isinstance(target_value, Mapping):
+            raise ValueError(f"{method} requires target")
+        target = self._authorize_target(FabricTarget.from_dict(target_value))
+        transport_kind = TransportKind(str(params.get("transport")))
+        if transport_kind is not self._profile.transport:
+            raise ValueError("request transport is not authorized by this broker's startup profile")
+        return target, transport_kind
+
+    @staticmethod
+    def _session_key(target: FabricTarget) -> tuple[str, str, str]:
+        return (target.workspace_id, target.notebook_id, target.language.value)
 
     async def _send(self, writer: asyncio.StreamWriter, value: Mapping[str, Any]) -> None:
         writer.write(encode_message(value))
@@ -351,6 +470,42 @@ class BrokerClient:
     def __init__(self, endpoint: BrokerEndpoint) -> None:
         self.endpoint = endpoint
 
+    async def connect(
+        self, target: FabricTarget, transport: TransportKind
+    ) -> Mapping[str, Any]:
+        values = await self._request(
+            "connect",
+            {"target": target.to_dict(), "transport": transport.value},
+            timeout=660,
+        )
+        session = values[0].get("session")
+        if not isinstance(session, Mapping):
+            raise RuntimeError("invalid broker connect response")
+        return session
+
+    async def stream_execute(
+        self,
+        *,
+        request_id: str,
+        target: FabricTarget,
+        code: str,
+        silent: bool,
+        transport: TransportKind,
+    ) -> AsyncIterator[ExecutionEvent]:
+        async for value in self._request_stream(
+            "execute",
+            {
+                "requestId": request_id,
+                "target": target.to_dict(),
+                "code": code,
+                "silent": silent,
+                "transport": transport.value,
+            },
+            timeout=660,
+        ):
+            if "event" in value:
+                yield event_from_message(value)
+
     async def execute(
         self,
         *,
@@ -360,35 +515,49 @@ class BrokerClient:
         silent: bool,
         transport: TransportKind,
     ) -> list[ExecutionEvent]:
-        values = await self._request(
-            "execute",
-            {
-                "requestId": request_id,
-                "target": target.to_dict(),
-                "code": code,
-                "silent": silent,
-                "transport": transport.value,
-            },
-            streaming=True,
-        )
-        return [event_from_message(value) for value in values if "event" in value]
+        return [
+            event
+            async for event in self.stream_execute(
+                request_id=request_id,
+                target=target,
+                code=code,
+                silent=silent,
+                transport=transport,
+            )
+        ]
 
     async def interrupt(self, target: FabricTarget) -> None:
-        await self._request("interrupt", {"target": target.to_dict()})
+        await self._request("interrupt", {"target": target.to_dict()}, timeout=60)
 
     async def shutdown(self, target: FabricTarget) -> None:
-        await self._request("shutdown", {"target": target.to_dict()})
+        await self._request("shutdown", {"target": target.to_dict()}, timeout=210)
 
     async def status(self) -> list[Mapping[str, Any]]:
-        values = await self._request("status", {})
+        values = await self._request("status", {}, timeout=60)
         sessions = values[0].get("sessions", [])
         if not isinstance(sessions, list):
             raise RuntimeError("invalid broker status response")
         return sessions
 
     async def _request(
-        self, method: str, params: Mapping[str, Any], *, streaming: bool = False
+        self,
+        method: str,
+        params: Mapping[str, Any],
+        *,
+        timeout: float = 30,
     ) -> list[dict[str, Any]]:
+        return [
+            value
+            async for value in self._request_stream(method, params, timeout=timeout)
+        ]
+
+    async def _request_stream(
+        self,
+        method: str,
+        params: Mapping[str, Any],
+        *,
+        timeout: float,
+    ) -> AsyncIterator[dict[str, Any]]:
         reader, writer = await self._connect()
         try:
             writer.write(
@@ -402,20 +571,21 @@ class BrokerClient:
                 )
             )
             await writer.drain()
-            values: list[dict[str, Any]] = []
             while True:
-                raw = await asyncio.wait_for(reader.readline(), timeout=30)
+                raw = await asyncio.wait_for(reader.readline(), timeout=timeout)
                 if not raw:
                     raise RuntimeError("broker closed the connection before completing its response")
                 value = decode_message(raw)
                 if "error" in value:
-                    raise RuntimeError(str(value["error"]))
+                    error = value["error"]
+                    if isinstance(error, Mapping) and isinstance(error.get("message"), str):
+                        raise RuntimeError(error["message"])
+                    raise RuntimeError("invalid broker error response")
                 if value.get("done") is True:
                     break
-                values.append(value)
-                if not streaming:
+                yield value
+                if method != "execute":
                     break
-            return values
         finally:
             writer.close()
             with suppress(Exception):
