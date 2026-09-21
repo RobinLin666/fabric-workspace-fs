@@ -175,4 +175,14 @@ jobs:
             gh release edit "${TAG}" --repo "${REPO}" --title "${TAG}" --notes-file RELEASE_NOTES.md --draft=false --prerelease=false
           fi
           mapfile -t assets < <(find release-assets -type f ! -name '*.buildinfo.txt' | sort)
+          expected_names="$(mktemp)"
+          for asset in "${assets[@]}"; do
+            basename "${asset}" >> "${expected_names}"
+          done
+          gh release view "${TAG}" --repo "${REPO}" --json assets --jq '.assets[].name' |
+            while IFS= read -r existing; do
+              if ! grep -Fxq "${existing}" "${expected_names}"; then
+                gh release delete-asset "${TAG}" "${existing}" --repo "${REPO}" --yes
+              fi
+            done
           gh release upload "${TAG}" --repo "${REPO}" --clobber "${assets[@]}"
