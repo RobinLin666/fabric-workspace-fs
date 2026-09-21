@@ -76,7 +76,13 @@ func TestCatalogLabelsDoNotExposeIDsAndAreBounded(t *testing.T) {
 	if _, err := CatalogName("label", "../escape"); err == nil {
 		t.Fatal("accepted non-UUID identity")
 	}
-	if NotebookContentName != "content.ipynb" {
+	if NotebookContentFileName("Sample notebook") != "Sample notebook.ipynb" {
 		t.Fatal("notebook local filename is not stable")
+	}
+	if got := NotebookContentFileName("a/b"); got != "a%2Fb.ipynb" {
+		t.Fatalf("NotebookContentFileName escaped path = %q", got)
+	}
+	if got := NotebookContentFileName(strings.Repeat("x", 300)); len(got) > 255 || !strings.HasSuffix(got, ".ipynb") {
+		t.Fatalf("NotebookContentFileName was not bounded: %q", got)
 	}
 }

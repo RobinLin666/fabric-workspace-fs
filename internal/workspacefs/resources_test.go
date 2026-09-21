@@ -154,7 +154,7 @@ func TestResourceFailuresDoNotBlockNotebookContent(t *testing.T) {
 	s, _, store := resourceTestFS(t)
 	store.DenyNotebook = true
 	nb := item(t, s, "Notebooks", "Sample notebook", testutil.NotebookID)
-	content := lookup(t, s, nb, "content.ipynb")
+	content := lookup(t, s, nb, "Sample notebook.ipynb")
 	h, err := s.Open(context.Background(), content, os.O_RDONLY)
 	if err != nil {
 		t.Fatal(err)

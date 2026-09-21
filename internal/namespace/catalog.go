@@ -15,7 +15,10 @@ type Label struct {
 	Suffix          string
 }
 
-const AgentRootName = ".agents"
+const (
+	AgentRootName  = ".agents"
+	AgentGuideName = "AGENTS.md"
+)
 
 // Catalog keeps display-name aliases bound to IDs for this mount's lifetime.
 // Deleted aliases remain reserved so a later duplicate cannot inherit a path

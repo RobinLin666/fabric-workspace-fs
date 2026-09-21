@@ -107,7 +107,19 @@ func validBundleEntry(entry workspacefs.Entry) bool {
 // Start with exact root Lookup, not root ReadDir: the latter legitimately
 // enumerates remote workspaces. Never resolve or touch any retired overlay.
 func (r *runner) directInjectedBundle() ([]bundleNode, int, error) {
-	root, err := r.backend.Lookup(r.ctx, r.backend.Root(), ".agents")
+	rootEntry := r.backend.Root()
+	guide, err := r.backend.Lookup(r.ctx, rootEntry, "AGENTS.md")
+	if err != nil {
+		return nil, 0, err
+	}
+	if !validBundleEntry(guide) || guide.Name != "AGENTS.md" || guide.Part != "AGENTS.md" {
+		return nil, 0, fail("mount root did not expose the root AGENTS.md guide")
+	}
+	guideLocation, err := childLocation(r.paths.root, guide)
+	if err != nil {
+		return nil, 0, err
+	}
+	root, err := r.backend.Lookup(r.ctx, rootEntry, ".agents")
 	if err != nil {
 		return nil, 0, err
 	}
@@ -118,9 +130,9 @@ func (r *runner) directInjectedBundle() ([]bundleNode, int, error) {
 	if err != nil {
 		return nil, 0, err
 	}
-	nodes := []bundleNode{{location: local}}
+	nodes := []bundleNode{{location: guideLocation}, {location: local}}
 	seen := map[string]bool{"": true}
-	total, guide, skill := 0, false, false
+	total, skill := 0, false
 	for i := 0; i < len(nodes); i++ {
 		node := nodes[i]
 		if r.backend.Writable(node.entry) {
@@ -147,7 +159,6 @@ func (r *runner) directInjectedBundle() ([]bundleNode, int, error) {
 				return nil, 0, fail("injected bundle exceeded the smoke byte bound")
 			}
 			nodes[i].data = data
-			guide = guide || stat.Part == "AGENT.md"
 			skill = skill || strings.HasPrefix(stat.Part, "skills/") && stat.Name == "SKILL.md"
 			continue
 		}
@@ -178,8 +189,8 @@ func (r *runner) directInjectedBundle() ([]bundleNode, int, error) {
 			nodes = append(nodes, bundleNode{location: childPath})
 		}
 	}
-	if !guide || !skill {
-		return nil, 0, fail("injected bundle omitted AGENT.md or its generated skills")
+	if !skill {
+		return nil, 0, fail("injected bundle omitted fabric-notebook-workflow")
 	}
 	return nodes, total, nil
 }

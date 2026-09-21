@@ -170,16 +170,17 @@ runtime/authentication/unsupported-platform failures.
 ```text
 <mount>/
   .agents/
-    AGENT.md
     skills/
-      <bundled-skill>/SKILL.md
+      fabric-notebook-workflow/
+        SKILL.md
+  AGENTS.md
   Analytics/
     .fabric.json
     Project/                              # a real Fabric folder
       .fabric.json
       Transform.Notebook/
         .fabric.json
-        content.ipynb
+        <Notebook Name>.ipynb
         builtin/                          # fixed descriptor; MWC needed to enter
     Data.Lakehouse/
       .fabric.json
@@ -200,7 +201,7 @@ runtime/authentication/unsupported-platform failures.
       resources/                          # independent MWC surface, read-only
 ```
 
-Notebook fixed children are `builtin`, `content.ipynb` and `.fabric.json`.
+Notebook fixed children are `builtin`, `<Notebook Name>.ipynb` and `.fabric.json`.
 Lakehouse fixed children are `Files`, `Tables` and `.fabric.json`. Merely
 enumerating these names does not export a definition or probe optional resource
 permissions. Accurate first-time Notebook content lookup/stat/open still needs
@@ -226,7 +227,7 @@ no `Notebooks`, `Lakehouses` or `Environments` type-group directories. Folder
 pagination is complete and bounded; orphaned items/parents, cycles and duplicate
 identities/parent assignments fail explicitly rather than being hidden.
 
-Notebook content is always named **`content.ipynb` locally** and maps to the
+Notebook content is named **`<Notebook Name>.ipynb` locally** and maps to the
 unique `.ipynb` part in the requested `ipynb` definition:
 both `notebook-content.ipynb` and `artifact.content.ipynb` are supported, without
 renaming the part sent back to Fabric. Other Notebook definition parts are not
@@ -348,19 +349,18 @@ scope restrictions.
 
 ### Read-only agent bundle; retired overlays
 
-Each mount injects `/.agents/AGENT.md` (singular) and a single
-`/.agents/skills/fabric-fuse/SKILL.md`, bound to the running binary's version.
-This compact bundle describes identity discovery, `.fabric.json` metadata,
-read/write boundaries, Notebook save conflicts, Lakehouse Files/Tables
-boundaries, and the requirement for explicit authorization before helper or
-execution actions. It contains no tokens, tenant secrets or agent session
-state, and reading it never contacts Fabric. The bundle is immutable,
-including all create/rename/truncate/delete entry points.
+Each mount injects a root-level `AGENTS.md`, plus the
+`/.agents/skills/fabric-notebook-workflow/SKILL.md` skill. The root guidance
+explains the local Notebook editing and `.fabric.json` identity boundaries. The
+`.agents` directory contains only
+the Notebook workflow skill; it contains no FUSE-specific skill or agent state.
+The bundle contains no tokens or tenant secrets, reading it never contacts
+Fabric, and every entry is immutable.
 
-Explicitly instruct an agent to read `<mountpoint>/.agents/AGENT.md`; this
-filename is **not a promise of automatic discovery by every agent**. The
-guidance is an original FUSE adaptation, not a VS Code command integration or
-an automatically installed external plugin. Remote Notebook resources are a
+Explicitly instruct an agent to read `<mountpoint>/AGENTS.md` and, for Notebook
+workflow operations, `<mountpoint>/.agents/skills/fabric-notebook-workflow/SKILL.md`.
+These files are guidance only, not a VS Code command integration or an
+automatically installed external plugin. Remote Notebook resources are a
 different trust boundary and cannot grant execution authority.
 
 The legacy `--overlay-dir`, `--overlay-max-file-size`, `--overlay-max-bytes`
@@ -527,7 +527,7 @@ Jupyter workflows requiring a temporary sibling followed by rename, checkpoint
 creation, direct `.ipynb` creation, or Notebook rename do not work.** Those operations
 are explicitly rejected; they are not silently discarded.
 Create an empty Notebook item with `mkdir Name.Notebook`, then edit its
-`content.ipynb` in place.
+`<Notebook Name>.ipynb` in place.
 
 For VS Code saving, the mount must be writable: `--read-only` intentionally
 rejects manual saves and Auto Save alike. Close open files, unmount, and start

@@ -92,7 +92,7 @@ func TestPortableFailSuppressesUnsupportedOperations(t *testing.T) {
 func TestPortableAdapterNamespaceAndReadOnlyBoundaries(t *testing.T) {
 	adapter, _ := portableFixture(t, false)
 	workspace, notebook, _, tables, environment := portablePaths(t)
-	if got := portableNames(t, adapter, notebook); strings.Join(got, ",") != ".,..,.fabric.json,builtin,content.ipynb" {
+	if got := portableNames(t, adapter, notebook); strings.Join(got, ",") != ".,..,.fabric.json,Sample notebook.ipynb,builtin" {
 		t.Fatalf("notebook entries = %v", got)
 	}
 	if got := portableNames(t, adapter, "/"+workspace); len(got) != 6 {
@@ -104,7 +104,7 @@ func TestPortableAdapterNamespaceAndReadOnlyBoundaries(t *testing.T) {
 	if status := adapter.Getattr(notebook+"/env", &fuse.Stat_t{}, ^uint64(0)); status != -fuse.ENOENT {
 		t.Fatalf("hidden notebook env getattr = %d", status)
 	}
-	if status := adapter.Getattr(notebook+"/../content.ipynb", &fuse.Stat_t{}, ^uint64(0)); status != -fuse.EINVAL {
+	if status := adapter.Getattr(notebook+"/../Sample notebook.ipynb", &fuse.Stat_t{}, ^uint64(0)); status != -fuse.EINVAL {
 		t.Fatalf("parent traversal getattr = %d", status)
 	}
 	for _, path := range []string{notebook + "/.fabric.json", tables, environment + "/.fabric.json"} {
@@ -149,15 +149,15 @@ func TestPortableAdapterNotebookReadAndLakehouseCRUD(t *testing.T) {
 	_, notebook, files, _, _ := portablePaths(t)
 
 	info := &fuse.FileInfo_t{Flags: fuse.O_RDONLY}
-	if status := adapter.OpenEx(notebook+"/content.ipynb", info); status != 0 {
+	if status := adapter.OpenEx(notebook+"/Sample notebook.ipynb", info); status != 0 {
 		t.Fatalf("open notebook: %d", status)
 	}
 	buffer := make([]byte, len(testutil.InitialNotebook)+1)
-	n := adapter.Read(notebook+"/content.ipynb", buffer, 0, info.Fh)
+	n := adapter.Read(notebook+"/Sample notebook.ipynb", buffer, 0, info.Fh)
 	if n != len(testutil.InitialNotebook) || string(buffer[:n]) != testutil.InitialNotebook {
 		t.Fatalf("notebook read = %q (%d)", buffer[:max(n, 0)], n)
 	}
-	if status := adapter.Release(notebook+"/content.ipynb", info.Fh); status != 0 {
+	if status := adapter.Release(notebook+"/Sample notebook.ipynb", info.Fh); status != 0 {
 		t.Fatalf("release notebook: %d", status)
 	}
 
@@ -235,7 +235,7 @@ func TestPortableAdapterNotebookSaveAndConflict(t *testing.T) {
 	t.Run("save", func(t *testing.T) {
 		adapter, service := portableFixture(t, false)
 		_, notebook, _, _, _ := portablePaths(t)
-		path := notebook + "/content.ipynb"
+		path := notebook + "/Sample notebook.ipynb"
 		info := &fuse.FileInfo_t{Flags: fuse.O_RDWR}
 		if status := adapter.OpenEx(path, info); status != 0 {
 			t.Fatal(status)
@@ -261,7 +261,7 @@ func TestPortableAdapterNotebookSaveAndConflict(t *testing.T) {
 	t.Run("conflict", func(t *testing.T) {
 		adapter, service := portableFixture(t, false)
 		_, notebook, _, _, _ := portablePaths(t)
-		path := notebook + "/content.ipynb"
+		path := notebook + "/Sample notebook.ipynb"
 		info := &fuse.FileInfo_t{Flags: fuse.O_RDWR}
 		if status := adapter.OpenEx(path, info); status != 0 {
 			t.Fatal(status)
@@ -313,7 +313,7 @@ func TestWinFspIntegration(t *testing.T) {
 		t.Fatalf("mounted workspace: %v", err)
 	}
 	_, notebook, _, _, _ := portablePaths(t)
-	notebookPath := filepath.Join(mountpoint+`\`, filepath.FromSlash(strings.TrimPrefix(notebook, "/")), "content.ipynb")
+	notebookPath := filepath.Join(mountpoint+`\`, filepath.FromSlash(strings.TrimPrefix(notebook, "/")), "Sample notebook.ipynb")
 	t.Run("node native realpath", func(t *testing.T) {
 		assertNodeNativeRealpath(t, mountpoint, filepath.Join(mountpoint+`\`, workspace), notebookPath)
 	})
@@ -338,7 +338,7 @@ func TestWinFspIntegration(t *testing.T) {
 	if service.Counts().NotebookUpdates != 3 {
 		t.Fatalf("editor saves did not persist: %+v", service.Counts())
 	}
-	temp := filepath.Join(filepath.Dir(notebookPath), ".content.ipynb.tmp")
+	temp := filepath.Join(filepath.Dir(notebookPath), ".Sample notebook.ipynb.tmp")
 	if err := os.WriteFile(temp, updated, 0644); err == nil {
 		t.Fatal("Notebook atomic-save temporary sibling unexpectedly allowed")
 	}
@@ -453,7 +453,7 @@ func TestWinFspReadOnlyNotebookSave(t *testing.T) {
 		server.Wait()
 	}()
 	_, notebook, _, _, _ := portablePaths(t)
-	path := filepath.Join(mountpoint+`\`, filepath.FromSlash(strings.TrimPrefix(notebook, "/")), "content.ipynb")
+	path := filepath.Join(mountpoint+`\`, filepath.FromSlash(strings.TrimPrefix(notebook, "/")), "Sample notebook.ipynb")
 	if err := os.WriteFile(path, []byte(`{"nbformat":4,"cells":[]}`), 0644); err == nil {
 		t.Fatal("read-only mount accepted a Notebook editor save")
 	}

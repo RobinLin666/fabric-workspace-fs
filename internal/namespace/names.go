@@ -18,6 +18,23 @@ const (
 	NotebookContentName = "content.ipynb"
 )
 
+// NotebookContentFileName returns the local Notebook content filename.
+// Empty display names are retained for synthetic test entries and legacy
+// callers; real Fabric Notebook items always have a display name.
+func NotebookContentFileName(displayName string) string {
+	if displayName == "" {
+		return NotebookContentName
+	}
+	encoded, err := Encode(displayName)
+	if err != nil {
+		return NotebookContentName
+	}
+	if len(encoded) > maxNameBytes-len(".ipynb") {
+		encoded = shorten(encoded, maxNameBytes-len(".ipynb"))
+	}
+	return encoded + ".ipynb"
+}
+
 // Encode escapes bytes rather than normalizing Unicode, so distinct remote names
 // never become aliases. Only catalog labels may contain path separators.
 func Encode(name string) (string, error) {

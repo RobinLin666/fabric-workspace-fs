@@ -18,6 +18,7 @@ import (
 	"fabric-workspace-fs/internal/auth"
 	"fabric-workspace-fs/internal/fabric"
 	"fabric-workspace-fs/internal/fserrors"
+	"fabric-workspace-fs/internal/namespace"
 	"fabric-workspace-fs/internal/onelake"
 	"fabric-workspace-fs/internal/transport"
 	"fabric-workspace-fs/internal/workspacefs"
@@ -166,8 +167,8 @@ func TestBundleDescriptorRejectsNameOnlyAndLegacyOverlayEntries(t *testing.T) {
 	for _, entry := range []workspacefs.Entry{
 		{Name: ".agents", Kind: workspacefs.OverlayDirectory, Directory: true},
 		{Name: ".agents", Kind: workspacefs.FabricFolder, Directory: true},
-		{Name: "AGENT.md", Kind: workspacefs.AgentFile, Workspace: testWorkspace},
-		{Name: "AGENT.md", Kind: workspacefs.AgentFile, Item: fabric.Item{ID: testNotebook}},
+		{Name: "AGENTS.md", Kind: workspacefs.AgentFile, Workspace: testWorkspace},
+		{Name: "AGENTS.md", Kind: workspacefs.AgentFile, Item: fabric.Item{ID: testNotebook}},
 		{Name: ".agents", Kind: workspacefs.AgentDirectory, Directory: true},
 	} {
 		if validBundleEntry(entry) {
@@ -230,7 +231,8 @@ func TestNotebookRootIsLazyAndBuiltinPresenceIsNotProviderSupport(t *testing.T) 
 		t.Fatal(err)
 	}
 	fixed, err := fixedItemLocations(parent, children)
-	if err != nil || len(fixed) != 3 || fixed["content.ipynb"].entry.Size != -1 || fixed["content.ipynb"].entry.Part != "" {
+	contentName := namespace.NotebookContentFileName(r.doc.Plan.NotebookDisplayName)
+	if err != nil || len(fixed) != 3 || fixed[contentName].entry.Size != -1 || fixed[contentName].entry.Part != "" {
 		t.Fatal("notebook root did not expose its exact lazy fixed descriptors")
 	}
 	coldIdentity := readBackendBytes(t, r, fixed[".fabric.json"].entry)

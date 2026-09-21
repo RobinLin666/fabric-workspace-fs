@@ -45,11 +45,11 @@ func TestFabricFoldersAndTypedItemsReplaceGroups(t *testing.T) {
 	project := lookup(t, s, workspace, "Projects")
 	nested := lookup(t, s, project, "Nested")
 	nb := lookup(t, s, nested, "Sample notebook.Notebook")
-	content := lookup(t, s, nb, namespace.NotebookContentName)
+	content := lookup(t, s, nb, namespace.NotebookContentFileName(nb.Item.DisplayName))
 	if content.Part != "notebook-content.ipynb" || nb.Item.FolderID != testFolderB {
 		t.Fatal("remote identity/part path changed", content, nb)
 	}
-	if _, err := s.Lookup(context.Background(), nb, "Sample notebook.ipynb"); !errors.Is(err, fs.ErrNotExist) {
+	if _, err := s.Lookup(context.Background(), nb, namespace.NotebookContentName); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatal("legacy notebook filename exposed", err)
 	}
 	builtin := lookup(t, s, nb, "builtin")

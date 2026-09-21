@@ -103,7 +103,7 @@ func (e Entry) Key() string {
 		return "injected-agents/" + e.Part
 	}
 	if e.Kind == NotebookContent {
-		return strings.ToLower(e.Workspace) + "/" + strings.ToLower(e.Item.ID) + "/" + namespace.NotebookContentName
+		return strings.ToLower(e.Workspace) + "/" + strings.ToLower(e.Item.ID) + "/" + namespace.NotebookContentFileName(e.Item.DisplayName)
 	}
 	if e.Kind == ResourceDirectory || e.Kind == ResourceFile {
 		return "resource/" + e.Resource.Target.WorkspaceID + "/" + e.Resource.Target.ItemID + "/" + e.Resource.Target.Kind + "/" + e.Resource.Relative
@@ -271,6 +271,9 @@ func New(fab FabricAPI, lake LakeAPI, opts Options) (*FS, error) {
 	}
 	filesystem.agentFiles = agentFiles
 	if err := filesystem.names.ReserveName("workspaces", namespace.AgentRootName); err != nil {
+		return nil, err
+	}
+	if err := filesystem.names.ReserveName("workspaces", namespace.AgentGuideName); err != nil {
 		return nil, err
 	}
 	return filesystem, nil

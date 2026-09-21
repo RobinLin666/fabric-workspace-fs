@@ -274,7 +274,7 @@ func TestManagedDeleteRefusesNonemptyOrOpenItems(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	content := lookup(t, s, nb, "content.ipynb")
+	content := lookup(t, s, nb, "N.ipynb")
 	h, err := s.Open(ctx, content, os.O_RDONLY)
 	if err != nil {
 		t.Fatal(err)
@@ -329,7 +329,7 @@ func TestInjectedAgentBundleIsReadonlyAndNeverCallsFabric(t *testing.T) {
 	ctx := context.Background()
 	before, _ := api.counts()
 	dot := lookup(t, s, root, ".agents")
-	e := lookup(t, s, dot, "AGENT.md")
+	e := lookup(t, s, root, "AGENTS.md")
 	h, err := s.Open(ctx, e, os.O_RDONLY)
 	if err != nil {
 		t.Fatal(err)
@@ -348,7 +348,7 @@ func TestInjectedAgentBundleIsReadonlyAndNeverCallsFabric(t *testing.T) {
 		t.Fatal("bundle truncate permitted", err)
 	}
 	for _, parent := range []Entry{root, dot} {
-		if _, _, err := s.Create(ctx, parent, "AGENT.md", os.O_WRONLY); !errors.Is(err, fserrors.ErrReadOnly) {
+		if _, _, err := s.Create(ctx, parent, "AGENTS.md", os.O_WRONLY); !errors.Is(err, fserrors.ErrReadOnly) {
 			t.Fatal("bundle create permitted", err)
 		}
 		if _, err := s.Mkdir(ctx, parent, ".agents"); !errors.Is(err, fserrors.ErrReadOnly) {

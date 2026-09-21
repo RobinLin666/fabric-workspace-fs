@@ -37,7 +37,7 @@ func TestMountedFabricFolderHierarchyAndContentFilename(t *testing.T) {
 			}
 		}
 	}
-	readFile(t, filepath.Join(notebook, "content.ipynb"), testutil.InitialNotebook)
+	readFile(t, filepath.Join(notebook, "Sample notebook.ipynb"), testutil.InitialNotebook)
 	data, err := os.ReadFile(filepath.Join(notebook, ".fabric.json"))
 	if err != nil {
 		t.Fatal(err)
@@ -62,19 +62,19 @@ func TestMountedInjectedAgentBundleIsReadonlyAndHTTPFree(t *testing.T) {
 		o.FNTKExecutable = "/opt/fntk/bin/fntk"
 	})
 	before := m.service.Counts()
-	root := filepath.Join(m.root, ".agents")
+	root := m.root
 	if entries, err := os.ReadDir(root); err != nil || len(entries) == 0 {
 		t.Fatal("injected instructions are missing", entries, err)
 	}
-	file := filepath.Join(root, "AGENT.md")
+	file := filepath.Join(root, "AGENTS.md")
 	if data, err := os.ReadFile(file); err != nil || len(data) == 0 {
 		t.Fatal("injected instructions are empty", err)
 	} else if !bytes.Contains(data, []byte("/opt/fntk/bin/fntk")) ||
-		bytes.Contains(data, []byte("fabric-notebook")) {
-		t.Fatal("injected instructions do not advertise only external fntk")
+		!bytes.Contains(data, []byte("fabric-notebook-workflow")) {
+		t.Fatal("injected instructions do not advertise the notebook workflow")
 	}
 	skills := 0
-	err := filepath.WalkDir(filepath.Join(root, "skills"), func(path string, entry os.DirEntry, err error) error {
+	err := filepath.WalkDir(filepath.Join(root, ".agents", "skills"), func(path string, entry os.DirEntry, err error) error {
 		if err != nil || entry.IsDir() {
 			return err
 		}
@@ -96,7 +96,7 @@ func TestMountedInjectedAgentBundleIsReadonlyAndHTTPFree(t *testing.T) {
 		func() error { return os.WriteFile(filepath.Join(root, "new"), nil, 0644) },
 		func() error { return os.Mkdir(filepath.Join(root, "new-directory"), 0755) },
 		func() error { return os.Remove(file) },
-		func() error { return os.Remove(root) },
+		func() error { return os.Remove(filepath.Join(root, ".agents")) },
 		func() error { return os.Rename(file, filepath.Join(root, "renamed")) },
 	} {
 		if err := operation(); !errors.Is(err, syscall.EROFS) && !errors.Is(err, syscall.EACCES) {

@@ -22,7 +22,7 @@ func (s *FS) definition(ctx context.Context, e Entry) (fabric.Definition, error)
 }
 
 func (s *FS) lookupNotebookPart(ctx context.Context, parent Entry, name string) (Entry, error) {
-	if name != namespace.NotebookContentName {
+	if name != namespace.NotebookContentFileName(parent.Item.DisplayName) {
 		return Entry{}, fs.ErrNotExist
 	}
 	entry := Entry{Name: name, Kind: NotebookContent, Workspace: parent.Workspace, Item: parent.Item}

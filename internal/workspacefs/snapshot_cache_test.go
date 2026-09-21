@@ -63,7 +63,7 @@ func TestFixedItemRootsAndIdentityDoNotExportDefinitions(t *testing.T) {
 		entry Entry
 		names []string
 	}{
-		{nb, []string{".fabric.json", "builtin", "content.ipynb"}},
+		{nb, []string{".fabric.json", "Sample notebook.ipynb", "builtin"}},
 		{env, []string{".fabric.json", "Libraries", "Setting", "resources"}},
 		{lake, []string{".fabric.json", "Files", "Tables"}},
 	} {
@@ -114,7 +114,7 @@ func TestDecodedNotebookSnapshotLastsExactlyTwoMinutes(t *testing.T) {
 	clock := newSnapshotClock()
 	s, remote := newTestFS(t, func(o *Options) { o.CacheTTL, o.Now = cachepolicy.DefaultTTL, clock.Now })
 	nb := directNotebook()
-	content := Entry{Name: "content.ipynb", Kind: NotebookContent, Workspace: nb.Workspace, Item: nb.Item}
+	content := Entry{Name: "Sample notebook.ipynb", Kind: NotebookContent, Workspace: nb.Workspace, Item: nb.Item}
 	start := clock.Now()
 	for _, seconds := range []int{0, 10, 60, 119, 121} {
 		clock.Advance(start.Add(time.Duration(seconds) * time.Second).Sub(clock.Now()))
@@ -159,7 +159,7 @@ func TestSnapshotIdentityPathIsOptionalAndExpiresWithSource(t *testing.T) {
 	if metadata.RemotePartPath != "" {
 		t.Fatal("cold identity fabricated a part path")
 	}
-	content := lookup(t, s, nb, "content.ipynb")
+	content := lookup(t, s, nb, "Sample notebook.ipynb")
 	metadata = lookup(t, s, nb, identityFileName)
 	if metadata.RemotePartPath != content.Part {
 		t.Fatal("observed part identity not reused")
@@ -254,7 +254,7 @@ func TestOversizedSnapshotIsNotRetainedByIdentity(t *testing.T) {
 		Size: func(snapshot *definitionSnapshot) int64 { return snapshot.bytes },
 	})
 	nb := directNotebook()
-	content := lookup(t, s, nb, "content.ipynb")
+	content := lookup(t, s, nb, "Sample notebook.ipynb")
 	if content.Size <= 0 {
 		t.Fatal("uncached oversized result was discarded")
 	}

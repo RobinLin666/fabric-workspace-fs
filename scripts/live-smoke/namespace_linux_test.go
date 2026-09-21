@@ -9,6 +9,7 @@ import (
 	"testing"
 
 	"fabric-workspace-fs/internal/fabric"
+	"fabric-workspace-fs/internal/namespace"
 	"fabric-workspace-fs/internal/resources"
 	"fabric-workspace-fs/internal/workspacefs"
 )
@@ -109,7 +110,7 @@ func notebookLocationForTest() location {
 
 func notebookChildrenForTest(parent location) []workspacefs.Entry {
 	return []workspacefs.Entry{{
-		Name: "content.ipynb", Kind: workspacefs.NotebookContent, Workspace: testWorkspace,
+		Name: namespace.NotebookContentFileName("Display"), Kind: workspacefs.NotebookContent, Workspace: testWorkspace,
 		Item: parent.entry.Item, Size: -1,
 	}, {
 		Name: ".fabric.json", Kind: workspacefs.IdentityFile, Workspace: testWorkspace,
@@ -131,16 +132,16 @@ func TestContentIPYNBResolvesLazyDescriptorAndPreservesRemotePartPath(t *testing
 	lookups := 0
 	lookup := func(_ context.Context, owner workspacefs.Entry, name string) (workspacefs.Entry, error) {
 		lookups++
-		if owner.Kind != workspacefs.Notebook || owner.Item.ID != testNotebook || name != "content.ipynb" {
+		if owner.Kind != workspacefs.Notebook || owner.Item.ID != testNotebook || name != namespace.NotebookContentFileName("Display") {
 			t.Fatal("body resolution guessed a platform/env path or changed its owner")
 		}
 		return resolved, nil
 	}
 	found, identity, err := notebookContentLocations(context.Background(), lookup, parent, children)
-	if err != nil || lookups != 1 || found.path != parent.path+"/content.ipynb" ||
+	if err != nil || lookups != 1 || found.path != parent.path+"/"+namespace.NotebookContentFileName("Display") ||
 		found.entry.Part != resolved.Part || found.entry.Size != resolved.Size ||
 		identity.path != parent.path+"/.fabric.json" || identity.entry.Kind != workspacefs.IdentityFile {
-		t.Fatal("local content.ipynb was confused with the remote definition part path")
+		t.Fatal("local display-name Notebook filename was confused with the remote definition part path")
 	}
 	if children[0].Size != -1 || children[0].Part != "" || identity.entry.RemotePartPath != "" {
 		t.Fatal("lazy listing or cold metadata was rewritten to invent a remote part path")

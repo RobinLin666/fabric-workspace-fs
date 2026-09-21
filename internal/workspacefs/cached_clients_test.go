@@ -241,10 +241,10 @@ func TestAuthorizationAndServiceErrorsAreNeverCachedAsEmptyTrees(t *testing.T) {
 			if entries, err := backend.ReadDir(context.Background(), dir); err != nil || len(entries) != 3 {
 				t.Fatal("fixed roots depended on definition export", entries, err)
 			}
-			if _, err := backend.Lookup(context.Background(), dir, "content.ipynb"); err == nil {
+			if _, err := backend.Lookup(context.Background(), dir, "Sample notebook.ipynb"); err == nil {
 				t.Fatal("remote content error converted to a success-shaped file")
 			}
-			if entry, err := backend.Lookup(context.Background(), dir, "content.ipynb"); err != nil || entry.Size <= 0 {
+			if entry, err := backend.Lookup(context.Background(), dir, "Sample notebook.ipynb"); err != nil || entry.Size <= 0 {
 				t.Fatal("remote error was cached", entry, err)
 			}
 		})

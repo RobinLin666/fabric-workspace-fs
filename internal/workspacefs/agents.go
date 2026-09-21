@@ -19,6 +19,9 @@ func (s *FS) agentChildren(parent Entry) ([]Entry, error) {
 	}
 	children := make(map[string]Entry)
 	for path, data := range s.agentFiles {
+		if path == namespace.AgentGuideName {
+			continue
+		}
 		if !strings.HasPrefix(path, prefix) {
 			continue
 		}

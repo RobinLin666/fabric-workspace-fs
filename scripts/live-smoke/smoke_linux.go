@@ -19,6 +19,7 @@ import (
 
 	"fabric-workspace-fs/internal/fabric"
 	"fabric-workspace-fs/internal/fserrors"
+	"fabric-workspace-fs/internal/namespace"
 	"fabric-workspace-fs/internal/workspacefs"
 )
 
@@ -241,7 +242,7 @@ func fixedItemLocations(parent location, children []workspacefs.Entry) (map[stri
 	}
 	switch parent.entry.Kind {
 	case workspacefs.Notebook:
-		expected["content.ipynb"] = shape{workspacefs.NotebookContent, false}
+		expected[namespace.NotebookContentFileName(entry.Item.DisplayName)] = shape{workspacefs.NotebookContent, false}
 		expected["builtin"] = shape{workspacefs.ResourceDirectory, true}
 	case workspacefs.Environment:
 		expected["Libraries"] = shape{workspacefs.DefinitionDirectory, true}
@@ -322,7 +323,8 @@ func notebookContentLocations(
 	if err != nil {
 		return location{}, location{}, err
 	}
-	content := fixed["content.ipynb"]
+	contentName := namespace.NotebookContentFileName(parent.entry.Item.DisplayName)
+	content := fixed[contentName]
 	// Readdir intentionally leaves Size=-1 and Part empty. Only exact Lookup
 	// (or Stat) can bind the body to the decoded remote snapshot.
 	resolved, err := lookup(ctx, parent.entry, content.entry.Name)

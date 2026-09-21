@@ -34,6 +34,19 @@ type counts struct {
 	HTTP, ExportAttempts, Exports, RejectedMutations int
 }
 
+func notebookContentPath(path string) (string, error) {
+	entries, err := os.ReadDir(path)
+	if err != nil {
+		return "", err
+	}
+	for _, entry := range entries {
+		if !entry.IsDir() && strings.HasSuffix(entry.Name(), ".ipynb") {
+			return filepath.Join(path, entry.Name()), nil
+		}
+	}
+	return "", fmt.Errorf("Notebook content file not found in %s", path)
+}
+
 type meter struct {
 	mu sync.Mutex
 	counts
@@ -262,7 +275,11 @@ func run(ctx context.Context, workspace, notebook, relative string, doc *evidenc
 		if err != nil {
 			return err
 		}
-		info, err := os.Stat(filepath.Join(path, "content.ipynb"))
+		content, err := notebookContentPath(path)
+		if err != nil {
+			return err
+		}
+		info, err := os.Stat(content)
 		if err != nil {
 			return err
 		}
@@ -271,11 +288,11 @@ func run(ctx context.Context, workspace, notebook, relative string, doc *evidenc
 			observed = info.ModTime()
 		}
 		s.SourceAgeSeconds = time.Since(observed).Seconds()
-		s.ReadMilliseconds, err = command(ctx, "cat", filepath.Join(path, "content.ipynb"))
+		s.ReadMilliseconds, err = command(ctx, "cat", content)
 		if err != nil {
 			return err
 		}
-		info, err = os.Stat(filepath.Join(path, "content.ipynb"))
+		info, err = os.Stat(content)
 		if err != nil {
 			return err
 		}

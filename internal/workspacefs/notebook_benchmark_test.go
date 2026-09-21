@@ -58,7 +58,7 @@ type offlineNotebookLake struct {
 
 func offlineNotebookEntry() Entry {
 	return Entry{
-		Name: "content.ipynb", Kind: NotebookContent, Workspace: offlineNotebookWorkspace,
+		Name: "Offline benchmark.ipynb", Kind: NotebookContent, Workspace: offlineNotebookWorkspace,
 		Item: fabric.Item{ID: "22222222-2222-4222-8222-222222222222", Type: "Notebook", DisplayName: "Offline benchmark"},
 	}
 }

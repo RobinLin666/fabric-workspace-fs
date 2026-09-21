@@ -29,8 +29,7 @@ func TestCatalogSnapshotsCannotBypassOversizeBudget(t *testing.T) {
 		t.Fatal("oversized catalog still owned", stats)
 	}
 	before, _ := api.counts()
-	agents := lookup(t, s, s.Root(), ".agents")
-	lookup(t, s, agents, "AGENT.md")
+	lookup(t, s, s.Root(), "AGENTS.md")
 	after, _ := api.counts()
 	if before != after {
 		t.Fatal("uncached catalogs made injected local access issue HTTP calls")

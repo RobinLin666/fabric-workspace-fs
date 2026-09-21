@@ -59,7 +59,7 @@ func TestMountedKernelCacheNotebookListingAndFirstSize(t *testing.T) {
 	before := m.service.Counts().DefinitionReads
 	entries, err := os.ReadDir(m.notebookDir)
 	if err != nil || len(entries) != 3 || entries[0].Name() != ".fabric.json" ||
-		entries[1].Name() != "builtin" || entries[2].Name() != "content.ipynb" {
+		entries[1].Name() != "builtin" || entries[2].Name() != "Sample notebook.ipynb" {
 		t.Fatalf("fixed notebook roots: %v %v", entries, err)
 	}
 	if info, err := os.Stat(filepath.Join(m.notebookDir, "builtin")); err != nil || !info.IsDir() {

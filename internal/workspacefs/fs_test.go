@@ -59,7 +59,7 @@ func item(t *testing.T, backend *FS, group, label, id string) Entry {
 func notebook(t *testing.T, backend *FS) (Entry, Entry) {
 	t.Helper()
 	dir := item(t, backend, "Notebooks", "Sample notebook", testutil.NotebookID)
-	return dir, lookup(t, backend, dir, namespace.NotebookContentName)
+	return dir, lookup(t, backend, dir, namespace.NotebookContentFileName("Sample notebook"))
 }
 
 func lakeRoots(t *testing.T, backend *FS) (Entry, Entry, Entry) {

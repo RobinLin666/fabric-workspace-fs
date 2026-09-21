@@ -59,6 +59,10 @@ func (s *FS) ReadDir(ctx context.Context, parent Entry) ([]Entry, error) {
 		}
 		if parent.Kind == Root {
 			out = append(out, s.agentRoot())
+			if data, ok := s.agentFiles[namespace.AgentGuideName]; ok {
+				out = append(out, Entry{Name: namespace.AgentGuideName, Kind: AgentFile,
+					Part: namespace.AgentGuideName, Size: int64(len(data)), Modified: s.start})
+			}
 		}
 	case Workspace, FabricFolder:
 		var err error
@@ -69,7 +73,7 @@ func (s *FS) ReadDir(ctx context.Context, parent Entry) ([]Entry, error) {
 	case Notebook:
 		// Readdir supplies names/types only; Lookup/Stat obtain accurate body
 		// attributes from the immutable decoded source snapshot when required.
-		out = append(out, Entry{Name: namespace.NotebookContentName, Kind: NotebookContent, Workspace: parent.Workspace, Item: parent.Item, Size: -1})
+		out = append(out, Entry{Name: namespace.NotebookContentFileName(parent.Item.DisplayName), Kind: NotebookContent, Workspace: parent.Workspace, Item: parent.Item, Size: -1})
 	case Environment, DefinitionDirectory:
 		var err error
 		out, err = s.environmentChildren(ctx, parent, false)
@@ -159,6 +163,14 @@ func (s *FS) Lookup(ctx context.Context, parent Entry, name string) (Entry, erro
 	}
 	if parent.Kind == Root && name == namespace.AgentRootName {
 		return s.agentRoot(), ctx.Err()
+	}
+	if parent.Kind == Root && name == namespace.AgentGuideName {
+		data, ok := s.agentFiles[namespace.AgentGuideName]
+		if !ok {
+			return Entry{}, fs.ErrNotExist
+		}
+		return Entry{Name: namespace.AgentGuideName, Kind: AgentFile, Part: namespace.AgentGuideName,
+			Size: int64(len(data)), Modified: s.start}, ctx.Err()
 	}
 	if parent.Kind == AgentDirectory {
 		children, err := s.agentChildren(parent)

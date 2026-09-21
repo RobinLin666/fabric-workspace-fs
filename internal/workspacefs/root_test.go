@@ -31,7 +31,7 @@ func TestMountRootContainsWorkspacesWithoutWrapperAndReservesAgents(t *testing.T
 		t.Fatal(err)
 	}
 	entries, err := s.ReadDir(context.Background(), s.Root())
-	if err != nil || len(entries) != 3 {
+	if err != nil || len(entries) != 4 {
 		t.Fatal(entries, err)
 	}
 	bundle := lookup(t, s, s.Root(), ".agents")
@@ -46,8 +46,16 @@ func TestMountRootContainsWorkspacesWithoutWrapperAndReservesAgents(t *testing.T
 	if _, err := s.Lookup(context.Background(), s.Root(), "Workspaces"); !errors.Is(err, fs.ErrNotExist) {
 		t.Fatal("legacy Workspaces wrapper still exposed", err)
 	}
-	if e := lookup(t, s, bundle, "AGENT.md"); e.Kind != AgentFile || s.Writable(e) || e.Size == 0 {
-		t.Fatal("injected instructions are absent or mutable", e)
+	if e := lookup(t, s, s.Root(), "AGENTS.md"); e.Kind != AgentFile || s.Writable(e) || e.Size == 0 {
+		t.Fatal("root injected instructions are absent or mutable", e)
+	}
+	skills := lookup(t, s, bundle, "skills")
+	workflow := lookup(t, s, skills, "fabric-notebook-workflow")
+	if !workflow.Directory {
+		t.Fatal("workflow skill directory is absent", workflow)
+	}
+	if e := lookup(t, s, workflow, "SKILL.md"); e.Kind != AgentFile || s.Writable(e) || e.Size == 0 {
+		t.Fatal("workflow skill is absent or mutable", e)
 	}
 }
 

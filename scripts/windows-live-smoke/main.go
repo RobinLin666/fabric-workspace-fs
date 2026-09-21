@@ -408,7 +408,7 @@ func readIdentity(path string) (identity, error) {
 }
 
 func (r *run) notebookChecks(path string) error {
-	content := filepath.Join(path, "content.ipynb")
+	content := filepath.Join(path, r.items["Notebook"].DisplayName+".ipynb")
 	start := time.Now()
 	if _, err := os.ReadFile(content); err != nil {
 		return err
@@ -481,7 +481,7 @@ func (r *run) notebookChecks(path string) error {
 		}
 		r.evidence.Checks["NodeEditorSave"] = "open-r+-truncate-writeFile-datasync-close; fresh remote definition verified"
 	}
-	if err := expectWriteDenied(filepath.Join(path, ".content.ipynb.tmp")); err != nil {
+	if err := expectWriteDenied(filepath.Join(path, "."+r.items["Notebook"].DisplayName+".ipynb.tmp")); err != nil {
 		return fmt.Errorf("Notebook atomic-save temporary sibling: %w", err)
 	}
 	r.evidence.Checks["AtomicSave"] = "temporary-sibling-create-rejected; in-place-save-required"

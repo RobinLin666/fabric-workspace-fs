@@ -54,7 +54,7 @@ func TestInvalidatedDefinitionFlightCannotRepublishOldSnapshot(t *testing.T) {
 	nb := directNotebook()
 	oldResult := make(chan error, 1)
 	go func() {
-		_, err := s.Lookup(ctx, nb, "content.ipynb")
+		_, err := s.Lookup(ctx, nb, "Sample notebook.ipynb")
 		oldResult <- err
 	}()
 	select {
@@ -67,7 +67,7 @@ func TestInvalidatedDefinitionFlightCannotRepublishOldSnapshot(t *testing.T) {
 	def := remote.Definition()
 	def.Parts[1].Payload = base64.StdEncoding.EncodeToString([]byte(current))
 	remote.SetDefinition(def)
-	entry, err := s.Lookup(ctx, nb, "content.ipynb")
+	entry, err := s.Lookup(ctx, nb, "Sample notebook.ipynb")
 	close(delayed.resume)
 	if err != nil {
 		t.Fatal(err)

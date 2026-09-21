@@ -9,11 +9,11 @@ import (
 	"unicode"
 )
 
-//go:embed AGENT.md
+//go:embed AGENTS.md
 var agentGuide string
 
-//go:embed fabric-fuse-skill.md
-var fabricFuseSkill string
+//go:embed fabric-notebook-workflow-skill.md
+var fabricNotebookWorkflowSkill string
 
 // Files returns a newly rendered bundle. It contains no per-user credentials,
 // tenant state, remote content, or mutable agent session files.
@@ -39,7 +39,7 @@ func Files(version, fntkExecutable string) (map[string][]byte, error) {
 		"{{FNTK}}", "'"+strings.ReplaceAll(fntkExecutable, "'", "'\\''")+"'",
 	)
 	return map[string][]byte{
-		"AGENT.md":                    []byte(replace.Replace(agentGuide)),
-		"skills/fabric-fuse/SKILL.md": []byte(replace.Replace(fabricFuseSkill)),
+		"AGENTS.md": []byte(replace.Replace(agentGuide)),
+		"skills/fabric-notebook-workflow/SKILL.md": []byte(fabricNotebookWorkflowSkill),
 	}, nil
 }

@@ -5,25 +5,34 @@ import (
 	"testing"
 )
 
-func TestBundleIsVersionedAndReturnedStorageIsPrivate(t *testing.T) {
+func TestBundleContentsAndReturnedStorageArePrivate(t *testing.T) {
 	files, err := Files("0.3.0+example", "/home/example/.local/bin/fntk")
 	if err != nil {
 		t.Fatal(err)
 	}
 	if len(files) != 2 {
-		t.Fatal("bundle must contain one singular AGENT.md and one consolidated skill")
+		t.Fatal("bundle must contain root AGENTS.md and the notebook workflow skill")
 	}
-	for _, path := range []string{"AGENT.md", "skills/fabric-fuse/SKILL.md"} {
-		if !bytes.Contains(files[path], []byte("0.3.0+example")) || bytes.Contains(files[path], []byte("{{")) {
-			t.Fatal("unbound bundle template", path)
-		}
-		if !bytes.Contains(files[path], []byte("/home/example/.local/bin/fntk")) {
-			t.Fatal("external fntk executable missing from bundle", path)
-		}
+	if _, ok := files["AGENTS.md"]; !ok {
+		t.Fatal("root AGENTS.md is missing")
 	}
-	files["AGENT.md"][0] = 'x'
+	if _, ok := files["skills/fabric-notebook-workflow/SKILL.md"]; !ok {
+		t.Fatal("fabric-notebook-workflow skill is missing")
+	}
+	if _, ok := files["skills/fabric-fuse/SKILL.md"]; ok {
+		t.Fatal("retired fabric-fuse skill is still bundled")
+	}
+	if bytes.Contains(files["AGENTS.md"], []byte("0.3.0+example")) ||
+		bytes.Contains(files["AGENTS.md"], []byte("/home/example/.local/bin/fntk")) ||
+		bytes.Contains(files["AGENTS.md"], []byte("{{")) {
+		t.Fatal("root guide contains runtime-specific substitutions")
+	}
+	if !bytes.Contains(files["skills/fabric-notebook-workflow/SKILL.md"], []byte("name: fabric-notebook-workflow")) {
+		t.Fatal("workflow skill metadata is missing")
+	}
+	files["AGENTS.md"][0] = 'x'
 	fresh, _ := Files("0.3.0+example", "")
-	if fresh["AGENT.md"][0] == 'x' {
+	if fresh["AGENTS.md"][0] == 'x' {
 		t.Fatal("caller mutated shared bundle template")
 	}
 	for _, bad := range []string{"version\ninjected", "version`injected"} {

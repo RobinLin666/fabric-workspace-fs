@@ -152,7 +152,7 @@ func mountFixtureClients(t *testing.T, readonly bool, configure func(*workspacef
 	workspace := filepath.Join(root, ws)
 	notebookDir := filepath.Join(workspace, nb+".Notebook")
 	return &mounted{
-		root: root, workspace: workspace, spool: opts.SpoolDirectory, notebook: filepath.Join(notebookDir, namespace.NotebookContentName),
+		root: root, workspace: workspace, spool: opts.SpoolDirectory, notebook: filepath.Join(notebookDir, namespace.NotebookContentFileName(nb)),
 		notebookDir: notebookDir, files: filepath.Join(workspace, lh+".Lakehouse", "Files"),
 		tables:      filepath.Join(workspace, lh+".Lakehouse", "Tables"),
 		environment: filepath.Join(workspace, env+".Environment"), service: service, server: server,
@@ -244,7 +244,7 @@ func TestMountedNotebookOpenTruncate(t *testing.T) {
 func TestMountedNotebookFsyncOffsetTruncateAndFlushFailure(t *testing.T) {
 	m := mountFixture(t, false)
 	entries, err := os.ReadDir(m.notebookDir)
-	if err != nil || len(entries) != 3 || entries[0].Name() != ".fabric.json" || entries[1].Name() != "builtin" || entries[2].Name() != "content.ipynb" {
+	if err != nil || len(entries) != 3 || entries[0].Name() != ".fabric.json" || entries[1].Name() != "builtin" || entries[2].Name() != "Sample notebook.ipynb" {
 		t.Fatalf("notebook readdir: %v %v", entries, err)
 	}
 	h, err := os.OpenFile(m.notebook, os.O_RDWR, 0)
