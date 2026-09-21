@@ -99,6 +99,12 @@ func (s *FS) Open(ctx context.Context, e Entry, flags int) (Handle, error) {
 		if !exists {
 			return nil, fs.ErrNotExist
 		}
+		if e.Kind == NotebookContent && s.opts.NotebookFormat == "py" {
+			data, err = notebookToPython(data, pythonIdentity(e))
+			if err != nil {
+				return nil, err
+			}
+		}
 		unpin, err := s.pinSnapshot(snapshot, false)
 		if err != nil {
 			return nil, err
@@ -131,6 +137,14 @@ func (s *FS) openNotebook(ctx context.Context, e Entry, flags int) (Handle, erro
 		return nil, fserrors.ErrConflict
 	}
 	data := snapshot.parts[snapshot.notebook]
+	if s.opts.NotebookFormat == "py" {
+		copy := e
+		copy.Part = snapshot.notebook
+		data, err = notebookToPython(data, pythonIdentity(copy))
+		if err != nil {
+			return nil, err
+		}
+	}
 	unpin, err := s.pinSnapshot(snapshot, true)
 	if err != nil {
 		return nil, err

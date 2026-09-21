@@ -133,6 +133,18 @@ Windows PowerShell:
 # Close files, then press Ctrl+C in the foreground mount terminal.
 ```
 
+Notebook content is exposed as `<Notebook Name>.ipynb` unless
+`--notebook-format py` is supplied. In `py` mode the fixed Notebook child is
+`<Notebook Name>.py`, using `# %%` cell markers and `# %% [markdown]` markdown
+cells. Saving that file still updates the same Fabric Notebook `ipynb`
+definition and preserves the remote definition part path and Notebook metadata,
+but cell outputs are not represented in the `.py` file and are intentionally
+not written back. The first lines are a commented `fabric-workspace-fs metadata`
+header with the Notebook ID, workspace ID, display name, remote part path, and
+common Fabric/Jupyter settings such as default lakehouse, environment, language,
+and kernel. This header is informational and is stripped before parsing cells on
+save, so it does not become a code cell.
+
 Drive-letter mounts appear as local WinFsp network drives. This lets
 `GetFinalPathNameByHandleW`—and therefore Node.js `fs.realpath.native`—resolve
 the root, directories, and files without requiring an elevated Mount Manager
@@ -201,7 +213,8 @@ runtime/authentication/unsupported-platform failures.
       resources/                          # independent MWC surface, read-only
 ```
 
-Notebook fixed children are `builtin`, `<Notebook Name>.ipynb` and `.fabric.json`.
+Notebook fixed children are `builtin`, `<Notebook Name>.ipynb` (or
+`<Notebook Name>.py` with `--notebook-format py`) and `.fabric.json`.
 Lakehouse fixed children are `Files`, `Tables` and `.fabric.json`. Merely
 enumerating these names does not export a definition or probe optional resource
 permissions. Accurate first-time Notebook content lookup/stat/open still needs
@@ -227,11 +240,13 @@ no `Notebooks`, `Lakehouses` or `Environments` type-group directories. Folder
 pagination is complete and bounded; orphaned items/parents, cycles and duplicate
 identities/parent assignments fail explicitly rather than being hidden.
 
-Notebook content is named **`<Notebook Name>.ipynb` locally** and maps to the
-unique `.ipynb` part in the requested `ipynb` definition:
+Notebook content is named **`<Notebook Name>.ipynb` locally** by default and
+maps to the unique `.ipynb` part in the requested `ipynb` definition:
 both `notebook-content.ipynb` and `artifact.content.ipynb` are supported, without
 renaming the part sent back to Fabric. Other Notebook definition parts are not
-listed, but are retained and sent back unchanged with every content save.
+listed, but are retained and sent back unchanged with every content save. With
+`--notebook-format py`, the local file is named **`<Notebook Name>.py`** while
+the remote definition request and update remain `ipynb`.
 
 Workspace/folder names use safe display names without GUIDs. Items add the
 canonical `.Notebook`, `.Lakehouse` or `.Environment` type suffix.

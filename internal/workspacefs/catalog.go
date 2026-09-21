@@ -73,7 +73,7 @@ func (s *FS) ReadDir(ctx context.Context, parent Entry) ([]Entry, error) {
 	case Notebook:
 		// Readdir supplies names/types only; Lookup/Stat obtain accurate body
 		// attributes from the immutable decoded source snapshot when required.
-		out = append(out, Entry{Name: namespace.NotebookContentFileName(parent.Item.DisplayName), Kind: NotebookContent, Workspace: parent.Workspace, Item: parent.Item, Size: -1})
+		out = append(out, Entry{Name: s.notebookContentFileName(parent.Item.DisplayName), Kind: NotebookContent, Workspace: parent.Workspace, Item: parent.Item, Size: -1})
 	case Environment, DefinitionDirectory:
 		var err error
 		out, err = s.environmentChildren(ctx, parent, false)

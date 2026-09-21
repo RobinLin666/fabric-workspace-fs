@@ -103,7 +103,11 @@ func (e Entry) Key() string {
 		return "injected-agents/" + e.Part
 	}
 	if e.Kind == NotebookContent {
-		return strings.ToLower(e.Workspace) + "/" + strings.ToLower(e.Item.ID) + "/" + namespace.NotebookContentFileName(e.Item.DisplayName)
+		name := e.Name
+		if name == "" {
+			name = namespace.NotebookContentFileName(e.Item.DisplayName)
+		}
+		return strings.ToLower(e.Workspace) + "/" + strings.ToLower(e.Item.ID) + "/" + name
 	}
 	if e.Kind == ResourceDirectory || e.Kind == ResourceFile {
 		return "resource/" + e.Resource.Target.WorkspaceID + "/" + e.Resource.Target.ItemID + "/" + e.Resource.Target.Kind + "/" + e.Resource.Relative
@@ -131,6 +135,7 @@ type Options struct {
 	Now                func() time.Time
 	Version            string
 	FNTKExecutable     string
+	NotebookFormat     string
 	MaxNotebookSize    int64
 	MaxFileSize        int64
 	MaxOpenHandles     int
@@ -154,7 +159,7 @@ func DefaultOptions() Options {
 	return Options{
 		CacheTTL: cachepolicy.DefaultTTL, MaxNotebookSize: 16 << 20,
 		MaxFileSize: 1 << 30, MaxOpenHandles: 64, MaxWriters: 16,
-		MaxResourceSize: 16 << 20,
+		MaxResourceSize: 16 << 20, NotebookFormat: "ipynb",
 	}
 }
 
@@ -202,6 +207,12 @@ func New(fab FabricAPI, lake LakeAPI, opts Options) (*FS, error) {
 	}
 	if len(opts.WorkspaceIDs) > 64 || (len(opts.WorkspaceIDs) > 0 && opts.AllWorkspaces) {
 		return nil, fmt.Errorf("invalid workspace selection: %w", fs.ErrInvalid)
+	}
+	if opts.NotebookFormat == "" {
+		opts.NotebookFormat = "ipynb"
+	}
+	if opts.NotebookFormat != "ipynb" && opts.NotebookFormat != "py" {
+		return nil, fmt.Errorf("notebook format must be ipynb or py: %w", fs.ErrInvalid)
 	}
 	if opts.MaxNotebookSize <= 0 || opts.MaxNotebookSize > 128<<20 || opts.MaxFileSize <= 0 || opts.CacheTTL < 0 ||
 		opts.MaxOpenHandles <= 0 || opts.MaxWriters <= 0 || opts.MaxWriters > opts.MaxOpenHandles ||

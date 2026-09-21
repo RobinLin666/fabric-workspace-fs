@@ -143,6 +143,7 @@ func TestNotebookRoundTripFormatPartsAndFlush(t *testing.T) {
 					t.Fatalf("untouched metadata part changed: %s => %s", a, b)
 				}
 			}
+
 			if string(result.Extra["futureDefinitionField"]) != string(original.Extra["futureDefinitionField"]) ||
 				string(result.Parts[1].Extra["futurePartField"]) != string(original.Parts[1].Extra["futurePartField"]) {
 				t.Fatal("unknown metadata fields lost")
@@ -156,6 +157,98 @@ func TestNotebookRoundTripFormatPartsAndFlush(t *testing.T) {
 			}
 			_ = reopened.Close()
 		})
+	}
+}
+
+func TestNotebookPythonFormatConvertsWithoutOutputs(t *testing.T) {
+	backend, remote := newTestFS(t, func(opts *Options) {
+		opts.NotebookFormat = "py"
+	})
+	original := remote.Definition()
+	original.Parts[1].Payload = base64.StdEncoding.EncodeToString([]byte(`{
+		"cells":[
+			{"cell_type":"markdown","metadata":{},"source":["# Title\n","Body\n"]},
+			{"cell_type":"code","execution_count":7,"metadata":{},"outputs":[{"output_type":"stream","name":"stdout","text":["old\n"]}],"source":["print('old')\n"]}
+		],
+		"metadata":{
+			"tag":"initial",
+			"kernelspec":{"display_name":"Synapse PySpark","language":"python","name":"synapse_pyspark"},
+			"dependencies":{"lakehouse":{"default_lakehouse":"lakehouse-id","default_lakehouse_name":"Lake","default_lakehouse_workspace_id":"lake-workspace"},"environment":{"environment_id":"env-id","environment_name":"Env"}}
+		},
+		"nbformat":4,
+		"nbformat_minor":5
+	}`))
+	remote.SetDefinition(original)
+
+	dir := item(t, backend, "Notebooks", "Sample notebook", testutil.NotebookID)
+	e := lookup(t, backend, dir, "Sample notebook.py")
+	handle, err := backend.Open(context.Background(), e, os.O_RDWR)
+	if err != nil {
+		t.Fatal(err)
+	}
+	got := read(t, handle)
+	wantHeader := "# fabric-workspace-fs metadata\n" +
+		"# id: \"" + testutil.NotebookID + "\"\n" +
+		"# workspaceId: \"" + testutil.WorkspaceID + "\"\n" +
+		"# displayName: \"Sample notebook\"\n" +
+		"# remotePartPath: \"notebook-content.ipynb\"\n" +
+		"# language: \"python\"\n" +
+		"# kernelName: \"synapse_pyspark\"\n" +
+		"# kernelDisplayName: \"Synapse PySpark\"\n" +
+		"# defaultLakehouse: \"lakehouse-id\"\n" +
+		"# defaultLakehouseName: \"Lake\"\n" +
+		"# defaultLakehouseWorkspaceId: \"lake-workspace\"\n" +
+		"# environmentId: \"env-id\"\n" +
+		"# environmentName: \"Env\"\n" +
+		"# ---\n\n"
+	want := wantHeader + "# %% [markdown]\n# # Title\n# Body\n\n# %%\nprint('old')\n"
+	if got != want {
+		t.Fatalf("python view mismatch:\n%s", got)
+	}
+	stat, err := backend.Stat(context.Background(), e)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if stat.Size != int64(len(want)) {
+		t.Fatalf("stat size = %d, want %d", stat.Size, len(want))
+	}
+
+	edited := "# %% [markdown]\n# # Title\n# Updated\n\n# %%\nprint('new')\n"
+	save(t, handle, edited)
+	if err := handle.Close(); err != nil {
+		t.Fatal(err)
+	}
+	result := remote.Definition()
+	if result.Format != "ipynb" || result.Parts[1].Path != original.Parts[1].Path {
+		t.Fatalf("wrong definition update: %+v", result)
+	}
+	data, err := result.Parts[1].Decode()
+	if err != nil {
+		t.Fatal(err)
+	}
+	var saved struct {
+		Cells []struct {
+			Type    string          `json:"cell_type"`
+			Source  []string        `json:"source"`
+			Outputs json.RawMessage `json:"outputs"`
+		} `json:"cells"`
+		Metadata map[string]any `json:"metadata"`
+	}
+	if err := json.Unmarshal(data, &saved); err != nil {
+		t.Fatal(err)
+	}
+	if len(saved.Cells) != 2 || saved.Cells[0].Type != "markdown" || saved.Cells[1].Type != "code" {
+		t.Fatalf("unexpected cells: %+v", saved.Cells)
+	}
+	if strings.Join(saved.Cells[0].Source, "") != "# Title\nUpdated\n" ||
+		strings.Join(saved.Cells[1].Source, "") != "print('new')\n" {
+		t.Fatalf("unexpected saved source: %+v", saved.Cells)
+	}
+	if string(saved.Cells[1].Outputs) != "[]" {
+		t.Fatalf("python save persisted outputs: %s", saved.Cells[1].Outputs)
+	}
+	if saved.Metadata["tag"] != "initial" {
+		t.Fatalf("notebook metadata was not preserved: %+v", saved.Metadata)
 	}
 }
 
