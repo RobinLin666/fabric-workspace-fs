@@ -85,4 +85,7 @@ func TestCatalogLabelsDoNotExposeIDsAndAreBounded(t *testing.T) {
 	if got := NotebookContentFileName(strings.Repeat("x", 300)); len(got) > 255 || !strings.HasSuffix(got, ".ipynb") {
 		t.Fatalf("NotebookContentFileName was not bounded: %q", got)
 	}
+	if got := NotebookContentFileNameWithExtension("Sample notebook", ".py"); got != "Sample notebook.py" {
+		t.Fatalf("NotebookContentFileNameWithExtension py = %q", got)
+	}
 }

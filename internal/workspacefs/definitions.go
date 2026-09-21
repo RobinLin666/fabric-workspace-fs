@@ -22,11 +22,18 @@ func (s *FS) definition(ctx context.Context, e Entry) (fabric.Definition, error)
 }
 
 func (s *FS) lookupNotebookPart(ctx context.Context, parent Entry, name string) (Entry, error) {
-	if name != namespace.NotebookContentFileName(parent.Item.DisplayName) {
+	if name != s.notebookContentFileName(parent.Item.DisplayName) {
 		return Entry{}, fs.ErrNotExist
 	}
 	entry := Entry{Name: name, Kind: NotebookContent, Workspace: parent.Workspace, Item: parent.Item}
 	return s.statDefinition(ctx, entry)
+}
+
+func (s *FS) notebookContentFileName(displayName string) string {
+	if s.opts.NotebookFormat == "py" {
+		return namespace.NotebookContentFileNameWithExtension(displayName, ".py")
+	}
+	return namespace.NotebookContentFileName(displayName)
 }
 
 func (s *FS) readDefinition(ctx context.Context, e Entry, fresh bool) (fabric.Definition, error) {
@@ -137,9 +144,24 @@ func (s *FS) statDefinition(ctx context.Context, e Entry) (Entry, error) {
 	if !exists {
 		return Entry{}, fs.ErrNotExist
 	}
+	if e.Kind == NotebookContent && s.opts.NotebookFormat == "py" {
+		data, err = notebookToPython(data, pythonIdentity(e))
+		if err != nil {
+			return Entry{}, err
+		}
+	}
 	e.Size, e.Modified = int64(len(data)), snapshot.observedAt
 	e.ValidUntil = snapshot.observedAt.Add(min(policy.Attr, policy.Definition))
 	return e, nil
+}
+
+func pythonIdentity(e Entry) pythonNotebookIdentity {
+	return pythonNotebookIdentity{
+		ID:             e.Item.ID,
+		WorkspaceID:    e.Workspace,
+		DisplayName:    e.Item.DisplayName,
+		RemotePartPath: e.Part,
+	}
 }
 
 func validNotebook(data []byte) error {
@@ -322,7 +344,15 @@ func (s *FS) notebookCommit(e Entry, snapshot *definitionSnapshot, partPath stri
 				return err
 			}
 		}
-		data, err := prepareNotebookForFabric(data)
+		var err error
+		if s.opts.NotebookFormat == "py" {
+			baseData := snapshot.parts[partPath]
+			data, err = pythonToNotebook(data, baseData)
+			if err != nil {
+				return fmt.Errorf("convert Python notebook to ipynb: %w", errors.Join(fs.ErrInvalid, err))
+			}
+		}
+		data, err = prepareNotebookForFabric(data)
 		if err != nil {
 			return fmt.Errorf("prepare notebook for Fabric: %w", errors.Join(fs.ErrInvalid, err))
 		}

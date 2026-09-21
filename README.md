@@ -41,6 +41,13 @@ mkdir -p "$HOME/fabric-mount"
   "$HOME/fabric-mount"
 ```
 
+Notebook content is exposed as `<Notebook Name>.ipynb` by default. Add
+`--notebook-format py` to expose `<Notebook Name>.py` instead; saves are still
+written back to Fabric as Notebook `ipynb` definitions, and the `.py` view does
+not preserve cell outputs. The `.py` view starts with a commented metadata
+header containing identifiers and common notebook settings such as workspace,
+default lakehouse, environment, language, and kernel.
+
 On Windows, build `bin\fabric-workspace-fs.exe` and use an unused drive such as
 `M:` as the mountpoint. Drive-letter mounts use WinFsp's local network-volume
 mode so native Windows path resolution works in Node.js and desktop file

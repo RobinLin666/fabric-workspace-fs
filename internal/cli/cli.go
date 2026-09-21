@@ -163,6 +163,7 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 	flags.BoolVar(&opts.ReadOnly, "read-only", false, "reject all local mutations")
 	flags.StringVar(&opts.SpoolDirectory, "spool-dir", "", "private local writeback/recovery directory (default user cache/fabric-workspace-fs/spool)")
 	flags.StringVar(&opts.FNTKExecutable, "fntk", "", "absolute path to an external fntk executable advertised by the read-only /.agents bundle")
+	flags.StringVar(&opts.NotebookFormat, "notebook-format", opts.NotebookFormat, "local Notebook content format: ipynb or py")
 	resourceProvider := flags.String("resource-provider", "none", "item resources: none or mwc (private API, explicit opt-in)")
 	flags.Int64Var(&opts.MaxResourceSize, "max-resource-size", opts.MaxResourceSize, "maximum bounded Notebook/Environment resource bytes")
 	flags.DurationVar(&opts.CacheTTL, "cache-ttl", cachepolicy.DefaultTTL, "uniform TTL for supported filesystem/kernel caches; 0s disables retention; exclusive with --cache-config")
@@ -202,6 +203,10 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 	opts.WorkspaceIDs = ids
 	if err := workspacefs.ValidatePrewarmCount(opts.PrewarmNotebookCount); err != nil {
 		fmt.Fprintln(stderr, err)
+		return 2
+	}
+	if opts.NotebookFormat != "ipynb" && opts.NotebookFormat != "py" {
+		fmt.Fprintln(stderr, "notebook-format must be ipynb or py")
 		return 2
 	}
 	opts.PrewarmTimeout = *operationTimeout

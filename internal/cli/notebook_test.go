@@ -14,6 +14,7 @@ func TestPrewarmArgumentsFailBeforeAuthentication(t *testing.T) {
 		{"mount", "--workspace", "invalid", "--prewarm-notebooks", "1", "point"},
 		{"mount", "--all-workspaces", "--prewarm-notebooks", "33", "point"},
 		{"mount", "--all-workspaces", "--prewarm-notebook", "unused", "point"},
+		{"mount", "--all-workspaces", "--notebook-format", "html", "point"},
 	} {
 		var output bytes.Buffer
 		if code := Run(context.Background(), args, &output, &output, "test"); code != 2 ||

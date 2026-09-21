@@ -22,17 +22,30 @@ const (
 // Empty display names are retained for synthetic test entries and legacy
 // callers; real Fabric Notebook items always have a display name.
 func NotebookContentFileName(displayName string) string {
+	return NotebookContentFileNameWithExtension(displayName, ".ipynb")
+}
+
+func NotebookContentFileNameWithExtension(displayName, extension string) string {
+	if extension != ".ipynb" && extension != ".py" {
+		extension = ".ipynb"
+	}
 	if displayName == "" {
-		return NotebookContentName
+		if extension == ".ipynb" {
+			return NotebookContentName
+		}
+		return strings.TrimSuffix(NotebookContentName, ".ipynb") + extension
 	}
 	encoded, err := Encode(displayName)
 	if err != nil {
-		return NotebookContentName
+		if extension == ".ipynb" {
+			return NotebookContentName
+		}
+		return strings.TrimSuffix(NotebookContentName, ".ipynb") + extension
 	}
-	if len(encoded) > maxNameBytes-len(".ipynb") {
-		encoded = shorten(encoded, maxNameBytes-len(".ipynb"))
+	if len(encoded) > maxNameBytes-len(extension) {
+		encoded = shorten(encoded, maxNameBytes-len(extension))
 	}
-	return encoded + ".ipynb"
+	return encoded + extension
 }
 
 // Encode escapes bytes rather than normalizing Unicode, so distinct remote names
