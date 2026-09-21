@@ -32,15 +32,19 @@ jobs:
             goarch: amd64
             cgo: "0"
             asset: fabric-workspace-fs-windows-amd64.exe
-          - os: macos-13
+          - os: macos-14
             goos: darwin
             goarch: amd64
             cgo: "1"
+            cc: clang -arch x86_64
+            cgo_flags: -arch x86_64
             asset: fabric-workspace-fs-darwin-amd64
           - os: macos-14
             goos: darwin
             goarch: arm64
             cgo: "1"
+            cc: clang -arch arm64
+            cgo_flags: -arch arm64
             asset: fabric-workspace-fs-darwin-arm64
     runs-on: ${{ matrix.os }}
     steps:
@@ -58,6 +62,9 @@ jobs:
         shell: bash
         env:
           CGO_ENABLED: ${{ matrix.cgo }}
+          CC: ${{ matrix.cc }}
+          CGO_CFLAGS: ${{ matrix.cgo_flags }}
+          CGO_LDFLAGS: ${{ matrix.cgo_flags }}
           GOOS: ${{ matrix.goos }}
           GOARCH: ${{ matrix.goarch }}
           ASSET: ${{ matrix.asset }}
