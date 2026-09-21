@@ -142,11 +142,11 @@ jobs:
           2. Rename it to \`fabric-workspace-fs\` (or keep the \`.exe\` suffix on Windows).
           3. Make it executable on Unix-like systems and place it in a directory on your \`PATH\`.
 
-          Example on Linux or macOS:
+          Example on Linux or macOS, replacing \`<downloaded-binary>\` with the asset you downloaded:
 
           \`\`\`bash
-          chmod +x fabric-workspace-fs-linux-amd64
-          sudo mv fabric-workspace-fs-linux-amd64 /usr/local/bin/fabric-workspace-fs
+          chmod +x <downloaded-binary>
+          sudo mv <downloaded-binary> /usr/local/bin/fabric-workspace-fs
           \`\`\`
 
           On macOS, install and approve macFUSE first. The macOS assets are built with CGO enabled and require macFUSE at runtime.
