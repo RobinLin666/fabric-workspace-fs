@@ -154,7 +154,7 @@ func TestContentIPYNBResolvesLazyDescriptorAndPreservesRemotePartPath(t *testing
 			children := notebookChildrenForTest(parent)
 			switch mutation {
 			case "display-name filename":
-				children[0].Name = "Display.ipynb"
+				children[0].Name = namespace.NotebookContentName
 			case "wrong owner":
 				children[0].Item.ID = testLakehouse
 			case "wrong workspace":
@@ -206,7 +206,7 @@ func TestContentLookupMustResolveAccurateSnapshotForSameOwner(t *testing.T) {
 			case "wrong workspace":
 				resolved.Workspace = testLakehouse
 			case "wrong name":
-				resolved.Name = "Display.ipynb"
+				resolved.Name = namespace.NotebookContentName
 			case "wrong kind":
 				resolved.Kind = workspacefs.DefinitionFile
 			case "directory":

@@ -206,11 +206,12 @@ func TestRunnerDiscoversSelectedWorkspaceDirectlyAtRootByIdentity(t *testing.T) 
 				t.Fatal("workspace paths still depend on a wrapper or guessed display name")
 			}
 			children, err := r.backend.ReadDir(r.ctx, r.backend.Root())
-			if err != nil || len(children) != 2 {
+			if err != nil || len(children) != 3 {
 				t.Fatal("root did not list the selected workspace and injected bundle")
 			}
 			for _, child := range children {
-				if child.Kind != workspacefs.Workspace && child.Kind != workspacefs.AgentDirectory {
+				if child.Kind != workspacefs.Workspace && child.Kind != workspacefs.AgentDirectory &&
+					child.Kind != workspacefs.AgentFile {
 					t.Fatal("root exposed a synthetic workspace container")
 				}
 			}
@@ -231,7 +232,7 @@ func TestNotebookRootIsLazyAndBuiltinPresenceIsNotProviderSupport(t *testing.T) 
 		t.Fatal(err)
 	}
 	fixed, err := fixedItemLocations(parent, children)
-	contentName := namespace.NotebookContentFileName(r.doc.Plan.NotebookDisplayName)
+	contentName := namespace.NotebookContentFileName(parent.entry.Item.DisplayName)
 	if err != nil || len(fixed) != 3 || fixed[contentName].entry.Size != -1 || fixed[contentName].entry.Part != "" {
 		t.Fatal("notebook root did not expose its exact lazy fixed descriptors")
 	}
