@@ -2,6 +2,11 @@ package cli
 
 import (
 	"context"
+	"crypto/rand"
+	"crypto/sha256"
+	"crypto/subtle"
+	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -9,10 +14,12 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"runtime"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"fabric-workspace-fs/internal/auth"
@@ -29,10 +36,12 @@ import (
 const usage = `fabric-workspace-fs - public Fabric API / OneLake filesystem
 
 Usage:
-  fabric-workspace-fs workspaces
+  fabric-workspace-fs workspaces                 List accessible workspaces
   fabric-workspace-fs mount --workspace <UUID> [--workspace <UUID> ...] <mountpoint>
   fabric-workspace-fs mount --all-workspaces [--read-only] <mountpoint>
-  fabric-workspace-fs version
+                                                   Mount selected or all workspaces
+  fabric-workspace-fs unmount <mountpoint>         Request a clean unmount
+  fabric-workspace-fs version                    Print the installed version
 
 Authentication: DefaultAzureCredential (for example, az login).
 Mounting requires FUSE 3 on Linux, WinFsp on Windows, or macFUSE on macOS.
@@ -41,7 +50,7 @@ Workspace display-name directories and read-only /.agents are exposed at the mou
 Fabric folders follow each workspace's hierarchy. Local dot-directory overlays are unsupported.
 Notebook atomic-save and remote item/folder rename are unsupported.
 Lakehouse Files are writable; Tables, Environment definitions and metadata are read-only.
-Run "fabric-workspace-fs mount --help" for limits and writeback options.
+Run "fabric-workspace-fs mount --help" for every mount option and its default.
 `
 
 type workspaceFlags []string
@@ -65,7 +74,7 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, version s
 	switch args[0] {
 	case "help", "--help", "-h":
 		fmt.Fprint(stdout, usage)
-		return 0
+		return mount(ctx, []string{"--help"}, stdout, stdout, version)
 	case "version", "--version":
 		fmt.Fprintln(stdout, "fabric-workspace-fs", version)
 		return 0
@@ -81,9 +90,171 @@ func Run(ctx context.Context, args []string, stdout, stderr io.Writer, version s
 		return workspaces(ctx, stdout, stderr)
 	case "mount":
 		return mount(ctx, args[1:], stdout, stderr, version)
+	case "unmount":
+		return unmount(args[1:], stdout, stderr)
 	default:
 		fmt.Fprintln(stderr, "unknown command; use --help")
 		return 2
+	}
+}
+
+type mountControlState struct {
+	Mountpoint string `json:"mountpoint"`
+	Secret     string `json:"secret"`
+}
+
+type mountControl struct {
+	statePath   string
+	requestPath string
+	secret      string
+	cancel      context.CancelFunc
+	stop        chan struct{}
+	done        chan struct{}
+	once        sync.Once
+}
+
+func mountControlPaths(mountpoint string) (string, string, error) {
+	cacheDir, err := os.UserCacheDir()
+	if err != nil {
+		return "", "", fmt.Errorf("locate mount control directory: %w", err)
+	}
+	key := mountpoint
+	if runtime.GOOS == "windows" {
+		key = strings.ToLower(key)
+	}
+	sum := sha256.Sum256([]byte(key))
+	root := filepath.Join(cacheDir, "fabric-workspace-fs", "mount-control")
+	return filepath.Join(root, hex.EncodeToString(sum[:])+".json"),
+		filepath.Join(root, hex.EncodeToString(sum[:])+".unmount"), nil
+}
+
+func startMountControl(mountpoint string, cancel context.CancelFunc) (*mountControl, error) {
+	if cancel == nil {
+		return nil, errors.New("mount cancellation is required")
+	}
+	statePath, requestPath, err := mountControlPaths(mountpoint)
+	if err != nil {
+		return nil, err
+	}
+	if err := os.MkdirAll(filepath.Dir(statePath), 0700); err != nil {
+		return nil, fmt.Errorf("create mount control directory: %w", err)
+	}
+	secretBytes := make([]byte, 32)
+	if _, err := rand.Read(secretBytes); err != nil {
+		return nil, fmt.Errorf("create mount control secret: %w", err)
+	}
+	state := mountControlState{Mountpoint: mountpoint, Secret: hex.EncodeToString(secretBytes)}
+	data, err := json.Marshal(state)
+	if err != nil {
+		return nil, err
+	}
+	// A successful mount owns this exact mountpoint, so stale state cannot
+	// identify another live instance at the same location.
+	if err := os.Remove(statePath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("replace stale mount control state: %w", err)
+	}
+	if err := os.Remove(requestPath); err != nil && !errors.Is(err, os.ErrNotExist) {
+		return nil, fmt.Errorf("remove stale unmount request: %w", err)
+	}
+	if err := os.WriteFile(statePath, data, 0600); err != nil {
+		return nil, fmt.Errorf("write mount control state: %w", err)
+	}
+	control := &mountControl{
+		statePath: statePath, requestPath: requestPath, secret: state.Secret,
+		cancel: cancel, stop: make(chan struct{}), done: make(chan struct{}),
+	}
+	go control.watch()
+	return control, nil
+}
+
+func (c *mountControl) watch() {
+	defer close(c.done)
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-c.stop:
+			return
+		case <-ticker.C:
+			request, err := os.ReadFile(c.requestPath)
+			if errors.Is(err, os.ErrNotExist) {
+				continue
+			}
+			if err != nil {
+				continue
+			}
+			if subtle.ConstantTimeCompare(request, []byte(c.secret)) != 1 {
+				continue
+			}
+			_ = os.Remove(c.requestPath)
+			c.cancel()
+			return
+		}
+	}
+}
+
+func (c *mountControl) Close() {
+	if c == nil {
+		return
+	}
+	c.once.Do(func() {
+		close(c.stop)
+		<-c.done
+		_ = os.Remove(c.requestPath)
+		_ = os.Remove(c.statePath)
+	})
+}
+
+func unmount(args []string, stdout, stderr io.Writer) int {
+	if len(args) == 1 && (args[0] == "--help" || args[0] == "-h") {
+		fmt.Fprintln(stdout, "Usage: fabric-workspace-fs unmount <mountpoint>")
+		fmt.Fprintln(stdout, "Requests a clean flush and shutdown from a mount started by this binary and user.")
+		return 0
+	}
+	if len(args) != 1 {
+		fmt.Fprintln(stderr, "unmount requires exactly one mountpoint; use `fabric-workspace-fs unmount --help`")
+		return 2
+	}
+	mountpoint, err := fusefs.NormalizeMountpoint(args[0])
+	if err != nil {
+		return runtimeError(stderr, err)
+	}
+	statePath, requestPath, err := mountControlPaths(mountpoint)
+	if err != nil {
+		return runtimeError(stderr, err)
+	}
+	data, err := os.ReadFile(statePath)
+	if errors.Is(err, os.ErrNotExist) {
+		fmt.Fprintf(stderr, "no active fabric-workspace-fs mount control state exists for %q; use Ctrl+C in the original mount terminal or %s\n", mountpoint, fusefs.UnmountHelp(mountpoint))
+		return 1
+	}
+	if err != nil {
+		return runtimeError(stderr, fmt.Errorf("read mount control state: %w", err))
+	}
+	var state mountControlState
+	if err := json.Unmarshal(data, &state); err != nil || state.Mountpoint != mountpoint || len(state.Secret) != 64 {
+		return runtimeError(stderr, errors.New("mount control state is invalid; refusing to signal the mount"))
+	}
+	if err := os.WriteFile(requestPath, []byte(state.Secret), 0600); err != nil {
+		return runtimeError(stderr, fmt.Errorf("request unmount: %w", err))
+	}
+	deadline := time.NewTimer(15 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if _, err := os.Stat(statePath); errors.Is(err, os.ErrNotExist) {
+			fmt.Fprintf(stdout, "Unmounted Fabric workspaces at %q.\n", mountpoint)
+			return 0
+		} else if err != nil {
+			return runtimeError(stderr, fmt.Errorf("check unmount status: %w", err))
+		}
+		select {
+		case <-deadline.C:
+			fmt.Fprintf(stderr, "unmount request for %q did not complete within 15s; %s\n", mountpoint, fusefs.UnmountHelp(mountpoint))
+			return 1
+		case <-ticker.C:
+		}
 	}
 }
 
@@ -157,14 +328,16 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 	opts.Version = version
 	var ids workspaceFlags
 	flags.Var(&ids, "workspace", "workspace UUID to expose (repeat up to 64; IDs, not names)")
-	flags.IntVar(&opts.PrewarmNotebookCount, "prewarm-notebooks", 0, "opt-in mount-level definition prewarm count (1..32; 0 disables)")
+	flags.IntVar(&opts.PrewarmNotebookCount, "prewarm-notebooks", 32, "Notebook content prewarm count after mount (0 disables; maximum 32)")
 	notebookDiagnostics := flags.Bool("notebook-diagnostics", false, "log content-free Notebook phase durations and prewarm totals")
 	flags.BoolVar(&opts.AllWorkspaces, "all-workspaces", false, "expose every workspace visible to the identity")
+	background := flags.Bool("background", false, "run mount in the background; use unmount for clean shutdown")
 	flags.BoolVar(&opts.ReadOnly, "read-only", false, "reject all local mutations")
 	flags.StringVar(&opts.SpoolDirectory, "spool-dir", "", "private local writeback/recovery directory (default user cache/fabric-workspace-fs/spool)")
 	flags.StringVar(&opts.FNTKExecutable, "fntk", "", "absolute path to an external fntk executable advertised by the read-only /.agents bundle")
 	flags.StringVar(&opts.NotebookFormat, "notebook-format", opts.NotebookFormat, "local Notebook content format: ipynb or py")
-	resourceProvider := flags.String("resource-provider", "none", "item resources: none or mwc (private API, explicit opt-in)")
+	notebookContentAPI := flags.String("notebook-content-api", "mwc", "Notebook content API: mwc (fntk-compatible) or public (definition/LRO)")
+	resourceProvider := flags.String("resource-provider", "mwc", "item resource provider: mwc (default) or none")
 	flags.Int64Var(&opts.MaxResourceSize, "max-resource-size", opts.MaxResourceSize, "maximum bounded Notebook/Environment resource bytes")
 	flags.DurationVar(&opts.CacheTTL, "cache-ttl", cachepolicy.DefaultTTL, "uniform TTL for supported filesystem/kernel caches; 0s disables retention; exclusive with --cache-config")
 	cacheConfig := flags.String("cache-config", "", "mount-time cache policy JSON file (maximum 1 MiB); exclusive with --cache-ttl")
@@ -177,11 +350,12 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 	definitionLimit := flags.Int64("max-definition-size", 64<<20, "maximum encoded definition envelope bytes (all parts)")
 	flags.Usage = func() {
 		fmt.Fprintln(flags.Output(), "Usage: fabric-workspace-fs mount (--workspace UUID ... | --all-workspaces) [options] <mountpoint>")
-		fmt.Fprintln(flags.Output(), "Foreground mount (Linux FUSE 3, Windows WinFsp, or macOS macFUSE). Notebook files support in-place saves only; no notebook atomic-save.")
-		fmt.Fprintln(flags.Output(), "Mount root contains workspace display-name directories and the injected read-only /.agents bundle.")
-		fmt.Fprintln(flags.Output(), "Legacy --overlay-* options are unsupported; existing overlay data is left untouched.")
-		flags.PrintDefaults()
-		fmt.Fprint(flags.Output(), cacheConfigUsage)
+		fmt.Fprintln(flags.Output(), "Mount selected Fabric workspaces in the foreground (Linux FUSE 3, Windows WinFsp, or macOS macFUSE).")
+		fmt.Fprintln(flags.Output(), "Specify either one or more --workspace UUID values or --all-workspaces. Notebook saves are in-place.")
+		fmt.Fprintln(flags.Output(), "The mount root contains workspace display-name directories and the read-only /.agents bundle.")
+		fmt.Fprintln(flags.Output(), "")
+		fmt.Fprintln(flags.Output(), "Options:")
+		printLongDefaults(flags)
 	}
 	if err := flags.Parse(args); err != nil {
 		if errors.Is(err, flag.ErrHelp) {
@@ -189,6 +363,8 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 		}
 		return 2
 	}
+	mountCtx, cancelMount := context.WithCancel(ctx)
+	defer cancelMount()
 	if flags.NArg() != 1 || (len(ids) == 0 && !opts.AllWorkspaces) ||
 		(len(ids) > 0 && opts.AllWorkspaces) || len(ids) > 64 {
 		fmt.Fprintln(stderr, "provide one mountpoint and either --workspace UUID (repeatable) or --all-workspaces; options must precede the mountpoint")
@@ -232,8 +408,10 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 		return 2
 	}
 
-	if (*resourceProvider != "none" && *resourceProvider != "mwc") || opts.MaxResourceSize <= 0 || opts.MaxResourceSize > 128<<20 {
-		fmt.Fprintln(stderr, "resource provider must be none or mwc; resource size must be 1..128 MiB")
+	if (*resourceProvider != "none" && *resourceProvider != "mwc") ||
+		(*notebookContentAPI != "mwc" && *notebookContentAPI != "public") ||
+		opts.MaxResourceSize <= 0 || opts.MaxResourceSize > 128<<20 {
+		fmt.Fprintln(stderr, "resource provider must be none or mwc; notebook content API must be mwc or public; resource size must be 1..128 MiB")
 		return 2
 	}
 	if !fusefs.Supported() {
@@ -262,18 +440,27 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 			return 2
 		}
 	}
+	if *background && os.Getenv("FABRICFS_BACKGROUND_CHILD") != "1" {
+		return startBackgroundMount(args, point, stdout, stderr)
+	}
 	fab, lake, tokens, err := clients(*httpTimeout, *operationTimeout, *definitionLimit)
 	if err != nil {
 		return runtimeError(stderr, err)
 	}
-	if *resourceProvider == "mwc" {
-		opts.ResourceBackend, err = mwc.New(mwc.Options{
+	if *resourceProvider == "mwc" || *notebookContentAPI == "mwc" {
+		mwcClient, err := mwc.New(mwc.Options{
 			FabricOrigin: fabric.BaseURL, Tokens: tokens, Workspaces: fab,
-			HTTPClient: &http.Client{Timeout: *httpTimeout}, MaxFileSize: opts.MaxResourceSize, CacheTTL: opts.CacheTTL,
+			HTTPClient: &http.Client{Timeout: *httpTimeout}, MaxFileSize: max(opts.MaxResourceSize, opts.MaxNotebookSize), CacheTTL: opts.CacheTTL,
 			CachePolicy: opts.CachePolicy,
 		})
 		if err != nil {
 			return runtimeError(stderr, err)
+		}
+		if *resourceProvider == "mwc" {
+			opts.ResourceBackend = mwcClient
+		}
+		if *notebookContentAPI == "mwc" {
+			opts.NotebookContentAPI = mwcClient
 		}
 	}
 	backend, err := workspacefs.New(fab, lake, opts)
@@ -297,7 +484,7 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 	}()
 	// Fail immediately on invalid selection/auth rather than mounting an
 	// apparently empty catalog that silently hides permission failures.
-	probeCtx, cancel := context.WithTimeout(ctx, *operationTimeout)
+	probeCtx, cancel := context.WithTimeout(mountCtx, *operationTimeout)
 	_, err = backend.ReadDir(probeCtx, workspacefs.Entry{Kind: workspacefs.Root, Directory: true})
 	cancel()
 	if err != nil {
@@ -318,8 +505,17 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 		}
 		return runtimeError(stderr, errors.Join(err, unmountErr))
 	}
+	control, err := startMountControl(point, cancelMount)
+	if err != nil {
+		unmountErr := server.Unmount()
+		if unmountErr != nil {
+			closeBackend = false
+		}
+		return runtimeError(stderr, errors.Join(err, unmountErr))
+	}
+	defer control.Close()
 	if opts.PrewarmNotebookCount != 0 {
-		if err := backend.StartPrewarm(ctx); err != nil {
+		if err := backend.StartPrewarm(mountCtx); err != nil {
 			unmountErr := server.Unmount()
 			if unmountErr != nil {
 				closeBackend = false
@@ -336,7 +532,7 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 	select {
 	case <-stopped:
 		return 0
-	case <-ctx.Done():
+	case <-mountCtx.Done():
 		if err := server.Unmount(); err != nil {
 			closeBackend = false
 			fmt.Fprintln(stderr, "unmount failed; "+fusefs.UnmountHelp(point))
@@ -345,6 +541,96 @@ func mount(ctx context.Context, args []string, stdout, stderr io.Writer, version
 		<-stopped
 		return 0
 	}
+}
+
+func startBackgroundMount(args []string, mountpoint string, stdout, stderr io.Writer) int {
+	executable, err := os.Executable()
+	if err != nil {
+		return runtimeError(stderr, fmt.Errorf("locate executable for background mount: %w", err))
+	}
+	logPath, err := backgroundLogPath(mountpoint)
+	if err != nil {
+		return runtimeError(stderr, err)
+	}
+	logFile, err := os.OpenFile(logPath, os.O_CREATE|os.O_APPEND|os.O_WRONLY, 0600)
+	if err != nil {
+		return runtimeError(stderr, fmt.Errorf("open background mount log: %w", err))
+	}
+	childArgs := append([]string{"mount"}, removeBackgroundFlag(args)...)
+	command := exec.Command(executable, childArgs...)
+	command.Env = append(os.Environ(), "FABRICFS_BACKGROUND_CHILD=1")
+	command.Stdin = nil
+	command.Stdout = logFile
+	command.Stderr = logFile
+	configureBackgroundProcess(command)
+	if err := command.Start(); err != nil {
+		logFile.Close()
+		return runtimeError(stderr, fmt.Errorf("start background mount: %w", err))
+	}
+	if err := logFile.Close(); err != nil {
+		return runtimeError(stderr, fmt.Errorf("close background mount log: %w", err))
+	}
+	statePath, _, err := mountControlPaths(mountpoint)
+	if err != nil {
+		return runtimeError(stderr, err)
+	}
+	deadline := time.NewTimer(15 * time.Second)
+	defer deadline.Stop()
+	ticker := time.NewTicker(100 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		if data, err := os.ReadFile(statePath); err == nil {
+			var state mountControlState
+			if json.Unmarshal(data, &state) == nil && state.Mountpoint == mountpoint {
+				fmt.Fprintf(stdout, "Mounted Fabric workspaces at %q in the background (PID %d).\nLogs: %s\nUse `fabric-workspace-fs unmount %s` for clean shutdown.\n",
+					mountpoint, command.Process.Pid, logPath, mountpoint)
+				return 0
+			}
+		}
+		select {
+		case <-deadline.C:
+			return runtimeError(stderr, fmt.Errorf("background mount did not become ready within 15s; inspect %q", logPath))
+		case <-ticker.C:
+		}
+	}
+}
+
+func removeBackgroundFlag(args []string) []string {
+	filtered := make([]string, 0, len(args))
+	for _, arg := range args {
+		if arg == "--background" || arg == "-background" ||
+			strings.HasPrefix(arg, "--background=") || strings.HasPrefix(arg, "-background=") {
+			continue
+		}
+		filtered = append(filtered, arg)
+	}
+	return filtered
+}
+
+func backgroundLogPath(mountpoint string) (string, error) {
+	statePath, _, err := mountControlPaths(mountpoint)
+	if err != nil {
+		return "", err
+	}
+	logDirectory := filepath.Join(filepath.Dir(filepath.Dir(statePath)), "logs")
+	if err := os.MkdirAll(logDirectory, 0700); err != nil {
+		return "", fmt.Errorf("create background mount log directory: %w", err)
+	}
+	return filepath.Join(logDirectory, strings.TrimSuffix(filepath.Base(statePath), ".json")+".log"), nil
+}
+
+func printLongDefaults(flags *flag.FlagSet) {
+	output := flags.Output()
+	var formatted strings.Builder
+	flags.SetOutput(&formatted)
+	flags.PrintDefaults()
+	flags.SetOutput(output)
+	text := formatted.String()
+	if strings.HasPrefix(text, "  -") {
+		text = "  --" + strings.TrimPrefix(text, "  -")
+	}
+	text = strings.ReplaceAll(text, "\n  -", "\n  --")
+	fmt.Fprint(output, text)
 }
 
 func validateFNTKExecutable(path string) error {

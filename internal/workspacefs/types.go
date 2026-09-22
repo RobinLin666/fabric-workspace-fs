@@ -33,6 +33,14 @@ type FabricAPI interface {
 	UpdateNotebook(context.Context, string, string, fabric.Definition) error
 }
 
+// NotebookContentAPI is the MWC Notebook content surface used by fntk. It is
+// intentionally separate from FabricAPI because this private endpoint has a
+// different consistency contract from the public definition API.
+type NotebookContentAPI interface {
+	GetNotebookContent(context.Context, string, string) ([]byte, string, error)
+	PutNotebookContent(context.Context, string, string, []byte) (string, error)
+}
+
 type LakeAPI interface {
 	Stat(context.Context, onelake.Path) (onelake.Info, error)
 	List(context.Context, onelake.Path) ([]onelake.Info, error)
@@ -145,6 +153,7 @@ type Options struct {
 	OverlayMaxBytes    int64
 	OverlayMaxEntries  int
 	ResourceBackend    resources.Backend
+	NotebookContentAPI NotebookContentAPI
 	MaxResourceSize    int64
 	// PrewarmNotebookCount enables bounded mount-level Notebook prewarming.
 	// Zero leaves prewarming disabled.
@@ -183,19 +192,20 @@ type FS struct {
 	mutating bool
 	changed  chan struct{}
 
-	names          namespace.Catalog
-	catalogs       *cache.Cache[*folderTree]
-	snapshots      *cache.Cache[*definitionSnapshot]
-	resources      resources.Backend
-	decodes        atomic.Uint64
-	digests        atomic.Uint64
-	pinMu          sync.Mutex
-	pinnedBytes    int64
-	pinnedCount    int
-	agentFiles     map[string][]byte
-	definitionGate definitionGate
-	prewarm        *notebookPrewarmer
-	notebookPerf   notebookPerf
+	names           namespace.Catalog
+	catalogs        *cache.Cache[*folderTree]
+	snapshots       *cache.Cache[*definitionSnapshot]
+	resources       resources.Backend
+	notebookContent NotebookContentAPI
+	decodes         atomic.Uint64
+	digests         atomic.Uint64
+	pinMu           sync.Mutex
+	pinnedBytes     int64
+	pinnedCount     int
+	agentFiles      map[string][]byte
+	definitionGate  definitionGate
+	prewarm         *notebookPrewarmer
+	notebookPerf    notebookPerf
 }
 
 func New(fab FabricAPI, lake LakeAPI, opts Options) (*FS, error) {
@@ -250,7 +260,7 @@ func New(fab FabricAPI, lake LakeAPI, opts Options) (*FS, error) {
 	}
 	filesystem := &FS{
 		fabric: newCachedFabric(fab, opts.CachePolicy, opts.Now), lake: newCachedLake(lake, opts.CachePolicy, opts.Now),
-		opts: opts, start: opts.Now(), now: opts.Now, resources: opts.ResourceBackend,
+		opts: opts, start: opts.Now(), now: opts.Now, resources: opts.ResourceBackend, notebookContent: opts.NotebookContentAPI,
 		active: make(map[string]lease), spools: make(map[string]*writeback.File),
 		changed: make(chan struct{}),
 	}

@@ -92,6 +92,13 @@ permission**, and the documented corresponding
 scopes. A local read-only mount does not turn these into Viewer-readable APIs.
 Encrypted sensitivity labels can prevent Notebook definition export. OneLake
 data access uses its separate Fabric/OneLake permissions and storage audience.
+By default, Notebook `.ipynb` content uses the same private MWC `GET`/`PUT`
+content endpoint as fntk, which requires a Power BI token and a Notebook MWC
+grant. Use `--notebook-content-api public` to retain the public
+`getDefinition`/`updateDefinition` LRO path instead. The MWC content endpoint
+is an unconditional PUT: its ETag is informational, not a verified
+server-side compare-and-swap contract. The filesystem retains the local
+writeback recovery file if that PUT fails.
 Service-principal/managed-identity availability also depends on tenant settings
 and the particular Fabric API; this tool grants no roles or permissions.
 
@@ -136,8 +143,8 @@ Windows PowerShell:
 Notebook content is exposed as `<Notebook Name>.ipynb` unless
 `--notebook-format py` is supplied. In `py` mode the fixed Notebook child is
 `<Notebook Name>.py`, using `# %%` cell markers and `# %% [markdown]` markdown
-cells. Saving that file still updates the same Fabric Notebook `ipynb`
-definition and preserves the remote definition part path and Notebook metadata,
+cells. Saving that file updates the same Fabric Notebook `ipynb` content and
+preserves its Notebook metadata,
 but cell outputs are not represented in the `.py` file and are intentionally
 not written back. The first lines are a commented `fabric-workspace-fs metadata`
 header with the Notebook ID, workspace ID, display name, remote part path, and
@@ -161,8 +168,19 @@ diskutil unmount "$HOME/fabric-mount"
 ```
 
 Ctrl+C/SIGTERM also requests unmount and waits for the FUSE server to stop.
-WinFsp 2.1's `fsptool` has no `unmount` command. On Windows, retain access to
-the foreground mount terminal so Ctrl+C can flush and shut down cleanly;
+To run a mount without retaining the terminal, pass `--background`; it writes
+the child process log under the user cache directory and prints its path. Stop
+such a mount with the same binary and mountpoint:
+
+```powershell
+.\bin\fabric-workspace-fs.exe unmount M:
+```
+
+`unmount` asks the original mount process to flush and shut down cleanly. It
+only controls mounts started by a version that supports this command and by the
+same OS user; it never force-terminates another process.
+WinFsp 2.1's `fsptool` has no `unmount` command. For a foreground Windows
+mount, retain access to its terminal so Ctrl+C can flush and shut down cleanly;
 forcibly terminating a writable mount can lose unflushed changes.
 Losing a stdout/stderr consumer does not terminate the daemon with SIGPIPE;
 use private file-backed logs for unattended mounts to preserve error details.
@@ -384,9 +402,10 @@ upload, migrate or delete previous overlay data. Older running mounts are
 independent. Keep temporary edits and agent state in an approved native local
 directory outside the mount.
 
-### Opt-in Notebook and Environment resources
+### Notebook and Environment resources
 
-Use `--resource-provider mwc` to enable the private resource provider.
+The private MWC resource provider is enabled by default. Pass
+`--resource-provider none` to disable it.
 `internal/resources.Backend` separates resource paths, identities, versions and
 read/write operations from the protocol so a future public implementation does
 not require changing FUSE, namespace, cache or spool code.
@@ -394,10 +413,10 @@ not require changing FUSE, namespace, cache or spool code.
 [Microsoft's documented resource boundary](https://learn.microsoft.com/fabric/data-engineering/notebook-source-control-deployment#notebooks-resources-folder-support-in-git)
 states that integration with deployment pipelines and public APIs is not
 currently supported. Git resource support is not a public resource REST API.
-Consequently the default public-only mode does not invent builtin files from
+Consequently the disabled-provider mode does not invent builtin files from
 definition parts or local storage; entering its fixed resource descriptor
-reports the unavailable provider. The explicitly enabled MWC provider is a
-separate private compatibility surface, not a claim of supported public API
+reports the unavailable provider. The default MWC provider is a separate
+private compatibility surface, not a claim of supported public API
 coverage, and does not start Spark merely to display resources.
 
 Notebook `builtin` is a local alias for its real filesystem `workdir` resource
@@ -652,7 +671,7 @@ manual review; avoid placing sensitive recovery data on a shared disk.
 | `--cache-ttl` | 2 minutes uniformly for supported filesystem/kernel caches; `0s` disables retention |
 | `--cache-config` | Strict mount-time JSON layer/type/surface/identity overrides; cannot be combined with explicit `--cache-ttl` |
 | Catalog caches | Workspace list: 1 entry / 8 MiB; workspace properties: 64 / 1 MiB; validated folder/item trees: 32 / 32 MiB |
-| `--resource-provider` / `--max-resource-size` | `none` by default; opt-in `mwc`, 16 MiB per bounded resource |
+| `--resource-provider` / `--max-resource-size` | `mwc` by default; use `none` to disable resources, 16 MiB per bounded resource |
 | Definition snapshot cache | 32 snapshots / 64 MiB estimated raw definition + decoded visible bodies + part index; no second raw-definition cache |
 | Active snapshot reservations | Largest of 256 MiB, six times Notebook limit, four times resource limit; includes conservative raw/decoded handle charges and writer commit buffers |
 | OneLake metadata caches | 4,096 stat records / 8 MiB; 64 directory listings / 16 MiB |
@@ -708,7 +727,8 @@ not hot-reloaded.
 
 ### Optional mount-level Notebook prewarming
 
-Prewarming is disabled by default. Set `--prewarm-notebooks <count>` to warm
+Prewarming defaults to 32 Notebook targets. Set `--prewarm-notebooks 0` to
+disable it, or choose a smaller count to warm
 up to 32 Notebooks across the mounted workspaces after the mount is ready. For
 example, in PowerShell:
 

@@ -290,7 +290,6 @@ func newPortableFS(backend *workspacefs.FS, logger *log.Logger) *portableFS {
 func (f *portableFS) Init() { f.once.Do(func() { close(f.ready) }) }
 
 func (f *portableFS) Destroy() {
-	f.cancel()
 	f.mu.Lock()
 	handles := f.handles
 	f.handles = make(map[uint64]*portableHandle)
@@ -299,14 +298,21 @@ func (f *portableFS) Destroy() {
 		handle.mu.Lock()
 		var err error
 		if !handle.closed {
+			if !handle.flushed {
+				err = handle.handle.Flush(context.Background())
+				if err == nil {
+					handle.flushed = true
+				}
+			}
 			handle.closed = true
-			err = handle.handle.Close()
+			err = errors.Join(err, handle.handle.Close())
 		}
 		handle.mu.Unlock()
 		if err != nil {
 			f.logger.Printf("release during destroy: %v", err)
 		}
 	}
+	f.cancel()
 }
 
 func (f *portableFS) fail(operation string, err error) int {
@@ -619,6 +625,13 @@ func (f *portableFS) Release(_ string, fh uint64) int {
 	defer handle.mu.Unlock()
 	if handle.closed {
 		return 0
+	}
+	if !handle.flushed {
+		if err := handle.handle.Flush(f.ctx); err != nil {
+			handle.closed = true
+			return f.fail("release flush", errors.Join(err, handle.handle.Close()))
+		}
+		handle.flushed = true
 	}
 	handle.closed = true
 	return f.fail("release", handle.handle.Close())

@@ -21,6 +21,16 @@ type folderTree struct {
 	observedAt     time.Time
 }
 
+type foldersResult struct {
+	folders []fabric.Folder
+	err     error
+}
+
+type itemsResult struct {
+	items []fabric.Item
+	err   error
+}
+
 func buildFolderTree(folders []fabric.Folder, items []fabric.Item) (*folderTree, error) {
 	tree := &folderTree{
 		folders: make(map[string]fabric.Folder), items: make(map[string]fabric.Item),
@@ -91,16 +101,28 @@ func buildFolderTree(folders []fabric.Folder, items []fabric.Item) (*folderTree,
 
 func (s *FS) folderTree(ctx context.Context, workspace string) (*folderTree, error) {
 	return s.catalogs.GetWithTTL(ctx, workspace, s.opts.CachePolicy.CatalogTTL(workspace), func(ctx context.Context) (*folderTree, error) {
-		// Refresh both halves of a tree together rather than mixing independent
-		// TTL generations after a folder move/rename or an item creation.
-		folders, err := s.fabric.FabricAPI.ListFolders(ctx, workspace)
-		if err != nil {
-			return nil, err
+		// Refresh both halves together rather than mixing generations after a
+		// folder move/rename or item creation. The endpoints are independent,
+		// so issue them concurrently to remove one network round trip from a
+		// cold workspace listing or filename lookup.
+		foldersDone := make(chan foldersResult, 1)
+		itemsDone := make(chan itemsResult, 1)
+		go func() {
+			folders, err := s.fabric.FabricAPI.ListFolders(ctx, workspace)
+			foldersDone <- foldersResult{folders, err}
+		}()
+		go func() {
+			items, err := s.fabric.FabricAPI.ListItems(ctx, workspace)
+			itemsDone <- itemsResult{items, err}
+		}()
+		folderResult, itemResult := <-foldersDone, <-itemsDone
+		if folderResult.err != nil {
+			return nil, folderResult.err
 		}
-		items, err := s.fabric.FabricAPI.ListItems(ctx, workspace)
-		if err != nil {
-			return nil, err
+		if itemResult.err != nil {
+			return nil, itemResult.err
 		}
+		folders, items := folderResult.folders, itemResult.items
 		tree, err := buildFolderTree(folders, items)
 		if err != nil {
 			return nil, err

@@ -321,7 +321,11 @@ func mergeNotebookMetadata(existing, incoming map[string]any) map[string]any {
 
 func (s *FS) notebookCommit(e Entry, snapshot *definitionSnapshot, partPath string) func(context.Context, io.ReaderAt, int64) error {
 	base := snapshot.definition
-	before, baseErr := s.snapshotDigest(snapshot)
+	var before [32]byte
+	var baseErr error
+	if !snapshot.contentAPI {
+		before, baseErr = s.snapshotDigest(snapshot)
+	}
 	return func(ctx context.Context, reader io.ReaderAt, size int64) (resultErr error) {
 		finish := s.startNotebookCommit(e)
 		defer func() { finish(resultErr == nil) }()
@@ -332,7 +336,7 @@ func (s *FS) notebookCommit(e Entry, snapshot *definitionSnapshot, partPath stri
 				s.observeNotebook("save_prepare", time.Since(start), resultErr)
 			}
 		}()
-		if baseErr != nil {
+		if baseErr != nil && !snapshot.contentAPI {
 			return baseErr
 		}
 		if size > s.opts.MaxNotebookSize {
@@ -362,6 +366,17 @@ func (s *FS) notebookCommit(e Entry, snapshot *definitionSnapshot, partPath stri
 		if err := validNotebook(data); err != nil {
 			return err
 		}
+		s.observeNotebook("save_prepare", time.Since(start), nil)
+		prepared = true
+		if snapshot.contentAPI {
+			start = time.Now()
+			_, err := s.notebookContent.PutNotebookContent(ctx, e.Workspace, e.Item.ID, data)
+			s.observeNotebook("content_put", time.Since(start), err)
+			if err == nil {
+				s.snapshots.Invalidate(snapshotKey(e))
+			}
+			return err
+		}
 		desired := base
 		desired.Parts = append([]fabric.Part(nil), base.Parts...)
 		desired.Format = "ipynb"
@@ -376,8 +391,6 @@ func (s *FS) notebookCommit(e Entry, snapshot *definitionSnapshot, partPath stri
 		if !found {
 			return fmt.Errorf("notebook content part disappeared: %w", fserrors.ErrConflict)
 		}
-		s.observeNotebook("save_prepare", time.Since(start), nil)
-		prepared = true
 		start = time.Now()
 		current, err := s.fetchDefinition(ctx, e)
 		s.observeNotebook("save_preflight", time.Since(start), err)

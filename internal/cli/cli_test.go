@@ -8,6 +8,7 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
 
 	"fabric-workspace-fs/internal/fusefs"
 )
@@ -20,6 +21,79 @@ func TestHelpAndVersionNeverAuthenticate(t *testing.T) {
 		if code != 0 || stdout.Len()+stderr.Len() == 0 {
 			t.Fatalf("%v returned %d %s%s", args, code, &stdout, &stderr)
 		}
+	}
+}
+
+func TestMountHelpDocumentsOptionsWithoutCacheInternals(t *testing.T) {
+	for _, args := range [][]string{{"mount", "--help"}, {"-h"}, {"--help"}} {
+		var output bytes.Buffer
+		if code := Run(context.Background(), args, &output, &output, "test"); code != 0 {
+			t.Fatalf("%v returned %d: %s", args, code, &output)
+		}
+		help := output.String()
+		for _, option := range []string{
+			"--all-workspaces", "--cache-config", "--cache-ttl", "--fntk", "--http-timeout",
+			"--max-definition-size", "--max-file-size", "--max-notebook-size", "--max-open-handles",
+			"--max-resource-size", "--max-writers", "--notebook-content-api", "--notebook-diagnostics",
+			"--notebook-format", "--operation-timeout", "--prewarm-notebooks", "--read-only",
+			"--resource-provider", "--spool-dir", "--workspace",
+		} {
+			if !strings.Contains(help, option) {
+				t.Fatalf("%v does not document %s:\n%s", args, option, help)
+			}
+		}
+		for _, internalDetail := range []string{"Precedence:", "Layer keys:", "Surfaces:"} {
+			if strings.Contains(help, internalDetail) {
+				t.Fatalf("%v exposed cache implementation detail %q:\n%s", args, internalDetail, help)
+			}
+			for _, defaultValue := range []string{`(default 32)`, `(default "mwc")`} {
+				if !strings.Contains(help, defaultValue) {
+					t.Fatalf("%v does not show %s:\n%s", args, defaultValue, help)
+				}
+			}
+		}
+	}
+}
+
+func TestUnmountRequestsCleanMountShutdown(t *testing.T) {
+	cacheDir := t.TempDir()
+	t.Setenv("XDG_CACHE_HOME", cacheDir)
+	t.Setenv("LocalAppData", cacheDir)
+	point, err := fusefs.NormalizeMountpoint("m:")
+	if err != nil {
+		t.Fatal(err)
+	}
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	control, err := startMountControl(point, cancel)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer control.Close()
+	go func() {
+		<-ctx.Done()
+		control.Close()
+	}()
+	var stdout, stderr bytes.Buffer
+	if code := unmount([]string{"m:"}, &stdout, &stderr); code != 0 {
+		t.Fatalf("unmount = %d: %s", code, &stderr)
+	}
+	select {
+	case <-ctx.Done():
+	case <-time.After(time.Second):
+		t.Fatal("unmount did not cancel mount context")
+	}
+	if !strings.Contains(stdout.String(), "Unmounted") {
+		t.Fatalf("unmount did not report success: %s", &stdout)
+	}
+}
+
+func TestRemoveBackgroundFlag(t *testing.T) {
+	args := []string{"--workspace", "id", "--background", "--background=true", "-background=false", "M:"}
+	got := removeBackgroundFlag(args)
+	want := []string{"--workspace", "id", "M:"}
+	if strings.Join(got, "\x00") != strings.Join(want, "\x00") {
+		t.Fatalf("removeBackgroundFlag = %q, want %q", got, want)
 	}
 }
 
