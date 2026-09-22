@@ -118,7 +118,8 @@ func TestMountedInjectedAgentBundleIsReadonlyAndHTTPFree(t *testing.T) {
 	}
 	// Resolving a destination outside .agents may discover the root's remote
 	// workspaces before the kernel rejects the read-only parent mutation.
-	if err := os.Rename(root, filepath.Join(m.root, ".agents-renamed")); !errors.Is(err, syscall.EROFS) && !errors.Is(err, syscall.EACCES) {
+	if err := os.Rename(root, filepath.Join(m.root, ".agents-renamed")); !errors.Is(err, syscall.EROFS) &&
+		!errors.Is(err, syscall.EACCES) && !errors.Is(err, syscall.EXDEV) {
 		t.Fatal("injected root was renamed", err)
 	}
 	if _, err := os.Stat(m.workspace); err != nil {
