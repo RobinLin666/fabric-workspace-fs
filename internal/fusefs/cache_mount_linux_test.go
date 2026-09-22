@@ -84,7 +84,7 @@ func TestMountedKernelCacheNotebookListingAndFirstSize(t *testing.T) {
 	found := false
 	for _, line := range strings.Split(string(long), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 9 && fields[len(fields)-1] == filepath.Base(m.notebook) {
+		if len(fields) >= 9 && strings.HasSuffix(line, " "+filepath.Base(m.notebook)) {
 			size, err := strconv.ParseInt(fields[4], 10, 64)
 			if err != nil || size != int64(len(testutil.InitialNotebook)) {
 				t.Fatalf("first ls -la used an unknown or stale regular-file size: %q %v", line, err)

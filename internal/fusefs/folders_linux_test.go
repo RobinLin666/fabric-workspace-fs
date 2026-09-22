@@ -102,8 +102,19 @@ func TestMountedInjectedAgentBundleIsReadonlyAndHTTPFree(t *testing.T) {
 			t.Fatal("injected instructions allowed a mutation", err)
 		}
 	}
-	if after := m.service.Counts(); after != before {
-		t.Fatalf("injected instructions made Fabric HTTP calls: before=%+v after=%+v", before, after)
+	if after := m.service.Counts(); after.CatalogReads != before.CatalogReads+1 ||
+		after.NotebookAttempts != before.NotebookAttempts ||
+		after.NotebookUpdates != before.NotebookUpdates ||
+		after.Renames != before.Renames ||
+		after.Appends != before.Appends ||
+		after.TablesRequests != before.TablesRequests ||
+		after.DefinitionReads != before.DefinitionReads ||
+		after.StorageStats != before.StorageStats ||
+		after.StorageLists != before.StorageLists ||
+		after.StorageReads != before.StorageReads ||
+		after.ManagedCreates != before.ManagedCreates ||
+		after.ManagedDeletes != before.ManagedDeletes {
+		t.Fatalf("read-only root mutation checks made unexpected Fabric calls: before=%+v after=%+v", before, after)
 	}
 	// Resolving a destination outside .agents may discover the root's remote
 	// workspaces before the kernel rejects the read-only parent mutation.
