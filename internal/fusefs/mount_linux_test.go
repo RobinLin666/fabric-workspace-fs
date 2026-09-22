@@ -244,7 +244,8 @@ func TestMountedNotebookOpenTruncate(t *testing.T) {
 func TestMountedNotebookFsyncOffsetTruncateAndFlushFailure(t *testing.T) {
 	m := mountFixture(t, false)
 	entries, err := os.ReadDir(m.notebookDir)
-	if err != nil || len(entries) != 3 || entries[0].Name() != ".fabric.json" || entries[1].Name() != "builtin" || entries[2].Name() != "Sample notebook.ipynb" {
+	if err != nil || len(entries) != 3 || entries[0].Name() != ".fabric.json" ||
+		entries[1].Name() != filepath.Base(m.notebook) || entries[2].Name() != "builtin" {
 		t.Fatalf("notebook readdir: %v %v", entries, err)
 	}
 	h, err := os.OpenFile(m.notebook, os.O_RDWR, 0)

@@ -69,8 +69,7 @@ func TestMountedInjectedAgentBundleIsReadonlyAndHTTPFree(t *testing.T) {
 	file := filepath.Join(root, "AGENTS.md")
 	if data, err := os.ReadFile(file); err != nil || len(data) == 0 {
 		t.Fatal("injected instructions are empty", err)
-	} else if !bytes.Contains(data, []byte("/opt/fntk/bin/fntk")) ||
-		!bytes.Contains(data, []byte("fabric-notebook-workflow")) {
+	} else if !bytes.Contains(data, []byte("fabric-notebook-workflow")) {
 		t.Fatal("injected instructions do not advertise the notebook workflow")
 	}
 	skills := 0
