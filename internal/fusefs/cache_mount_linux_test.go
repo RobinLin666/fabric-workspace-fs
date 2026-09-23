@@ -59,7 +59,7 @@ func TestMountedKernelCacheNotebookListingAndFirstSize(t *testing.T) {
 	before := m.service.Counts().DefinitionReads
 	entries, err := os.ReadDir(m.notebookDir)
 	if err != nil || len(entries) != 3 || entries[0].Name() != ".fabric.json" ||
-		entries[1].Name() != "builtin" || entries[2].Name() != "Sample notebook.ipynb" {
+		entries[1].Name() != filepath.Base(m.notebook) || entries[2].Name() != "builtin" {
 		t.Fatalf("fixed notebook roots: %v %v", entries, err)
 	}
 	if info, err := os.Stat(filepath.Join(m.notebookDir, "builtin")); err != nil || !info.IsDir() {
@@ -84,7 +84,7 @@ func TestMountedKernelCacheNotebookListingAndFirstSize(t *testing.T) {
 	found := false
 	for _, line := range strings.Split(string(long), "\n") {
 		fields := strings.Fields(line)
-		if len(fields) >= 9 && fields[len(fields)-1] == filepath.Base(m.notebook) {
+		if len(fields) >= 9 && strings.HasSuffix(line, " "+filepath.Base(m.notebook)) {
 			size, err := strconv.ParseInt(fields[4], 10, 64)
 			if err != nil || size != int64(len(testutil.InitialNotebook)) {
 				t.Fatalf("first ls -la used an unknown or stale regular-file size: %q %v", line, err)

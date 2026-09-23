@@ -242,7 +242,7 @@ func fixedItemLocations(parent location, children []workspacefs.Entry) (map[stri
 	}
 	switch parent.entry.Kind {
 	case workspacefs.Notebook:
-		expected[namespace.NotebookContentFileName(entry.Item.DisplayName)] = shape{workspacefs.NotebookContent, false}
+		expected[namespace.NotebookContentFileName(parent.entry.Item.DisplayName)] = shape{workspacefs.NotebookContent, false}
 		expected["builtin"] = shape{workspacefs.ResourceDirectory, true}
 	case workspacefs.Environment:
 		expected["Libraries"] = shape{workspacefs.DefinitionDirectory, true}

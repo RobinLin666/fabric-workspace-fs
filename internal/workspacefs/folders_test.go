@@ -20,6 +20,32 @@ const (
 	testFolderB = "88888888-8888-8888-8888-888888888888"
 )
 
+type coordinatedCatalogAPI struct {
+	FabricAPI
+	foldersStarted chan struct{}
+	itemsStarted   chan struct{}
+}
+
+func (a *coordinatedCatalogAPI) ListFolders(ctx context.Context, _ string) ([]fabric.Folder, error) {
+	close(a.foldersStarted)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-a.itemsStarted:
+		return nil, nil
+	}
+}
+
+func (a *coordinatedCatalogAPI) ListItems(ctx context.Context, _ string) ([]fabric.Item, error) {
+	close(a.itemsStarted)
+	select {
+	case <-ctx.Done():
+		return nil, ctx.Err()
+	case <-a.foldersStarted:
+		return nil, nil
+	}
+}
+
 func workspaceRoot(t *testing.T, s *FS) Entry {
 	t.Helper()
 	return lookup(t, s, s.Root(), "Sample workspace")
@@ -79,6 +105,33 @@ func TestFabricFoldersAndTypedItemsReplaceGroups(t *testing.T) {
 	lookup(t, s, lake, "Files")
 	lookup(t, s, lake, "Tables")
 	lookup(t, s, workspace, "Sample environment.Environment")
+}
+
+func TestFolderTreeFetchesFoldersAndItemsConcurrently(t *testing.T) {
+	api := &coordinatedCatalogAPI{
+		foldersStarted: make(chan struct{}),
+		itemsStarted:   make(chan struct{}),
+	}
+	opts := DefaultOptions()
+	opts.WorkspaceIDs, opts.SpoolDirectory = []string{testutil.WorkspaceID}, t.TempDir()
+	s, err := New(api, &offlineNotebookLake{}, opts)
+	if err != nil {
+		t.Fatal(err)
+	}
+	t.Cleanup(func() {
+		if err := s.Close(); err != nil {
+			t.Error(err)
+		}
+	})
+	ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+	defer cancel()
+	tree, err := s.folderTree(ctx, testutil.WorkspaceID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(tree.folders) != 0 || len(tree.items) != 0 {
+		t.Fatalf("unexpected catalog contents: %+v", tree)
+	}
 }
 
 func TestFolderGraphRejectsOrphansCyclesAndDuplicateParents(t *testing.T) {

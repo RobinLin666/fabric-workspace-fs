@@ -18,15 +18,17 @@ import (
 // Raw definitions and decoded bodies have one retention owner. Callers never
 // mutate a snapshot; a writable save constructs a separate multipart request.
 type definitionSnapshot struct {
-	definition fabric.Definition
-	parts      map[string][]byte
-	notebook   string
-	observedAt time.Time
-	bytes      int64
-	version    [32]byte
-	versionErr error
-	versionOne sync.Once
-	prewarmed  atomic.Bool
+	definition  fabric.Definition
+	parts       map[string][]byte
+	notebook    string
+	contentETag string
+	contentAPI  bool
+	observedAt  time.Time
+	bytes       int64
+	version     [32]byte
+	versionErr  error
+	versionOne  sync.Once
+	prewarmed   atomic.Bool
 }
 
 func snapshotKey(e Entry) string {
@@ -48,6 +50,28 @@ func (s *FS) sourceSnapshot(ctx context.Context, e Entry, maxAge time.Duration, 
 		maxAge = 0
 	}
 	snapshot, err := s.snapshots.GetWithin(ctx, key, min(maxAge, policy.Definition), policy.Definition, func(ctx context.Context) (*definitionSnapshot, error) {
+		if e.Item.Type == "Notebook" && s.notebookContent != nil {
+			start := time.Now()
+			data, etag, err := s.notebookContent.GetNotebookContent(ctx, e.Workspace, e.Item.ID)
+			s.observeNotebook("content_get", time.Since(start), err)
+			if err != nil {
+				return nil, err
+			}
+			if int64(len(data)) > s.opts.MaxNotebookSize {
+				return nil, fserrors.ErrTooLarge
+			}
+			start = time.Now()
+			if err := validNotebook(data); err != nil {
+				s.observeNotebook("decode_validate", time.Since(start), err)
+				return nil, err
+			}
+			s.observeNotebook("decode_validate", time.Since(start), nil)
+			s.decodes.Add(1)
+			return &definitionSnapshot{
+				parts: map[string][]byte{"": append([]byte(nil), data...)}, notebook: "", contentETag: etag, contentAPI: true,
+				observedAt: s.now(), bytes: int64(len(data)) + 256,
+			}, nil
+		}
 		def, err := s.fetchDefinition(ctx, e)
 		if err != nil {
 			return nil, err

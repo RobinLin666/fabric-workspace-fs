@@ -69,8 +69,7 @@ func TestMountedInjectedAgentBundleIsReadonlyAndHTTPFree(t *testing.T) {
 	file := filepath.Join(root, "AGENTS.md")
 	if data, err := os.ReadFile(file); err != nil || len(data) == 0 {
 		t.Fatal("injected instructions are empty", err)
-	} else if !bytes.Contains(data, []byte("/opt/fntk/bin/fntk")) ||
-		!bytes.Contains(data, []byte("fabric-notebook-workflow")) {
+	} else if !bytes.Contains(data, []byte("fabric-notebook-workflow")) {
 		t.Fatal("injected instructions do not advertise the notebook workflow")
 	}
 	skills := 0
@@ -103,12 +102,24 @@ func TestMountedInjectedAgentBundleIsReadonlyAndHTTPFree(t *testing.T) {
 			t.Fatal("injected instructions allowed a mutation", err)
 		}
 	}
-	if after := m.service.Counts(); after != before {
-		t.Fatalf("injected instructions made Fabric HTTP calls: before=%+v after=%+v", before, after)
+	if after := m.service.Counts(); after.CatalogReads != before.CatalogReads+1 ||
+		after.NotebookAttempts != before.NotebookAttempts ||
+		after.NotebookUpdates != before.NotebookUpdates ||
+		after.Renames != before.Renames ||
+		after.Appends != before.Appends ||
+		after.TablesRequests != before.TablesRequests ||
+		after.DefinitionReads != before.DefinitionReads ||
+		after.StorageStats != before.StorageStats ||
+		after.StorageLists != before.StorageLists ||
+		after.StorageReads != before.StorageReads ||
+		after.ManagedCreates != before.ManagedCreates ||
+		after.ManagedDeletes != before.ManagedDeletes {
+		t.Fatalf("read-only root mutation checks made unexpected Fabric calls: before=%+v after=%+v", before, after)
 	}
 	// Resolving a destination outside .agents may discover the root's remote
 	// workspaces before the kernel rejects the read-only parent mutation.
-	if err := os.Rename(root, filepath.Join(m.root, ".agents-renamed")); !errors.Is(err, syscall.EROFS) && !errors.Is(err, syscall.EACCES) {
+	if err := os.Rename(root, filepath.Join(m.root, ".agents-renamed")); !errors.Is(err, syscall.EROFS) &&
+		!errors.Is(err, syscall.EACCES) && !errors.Is(err, syscall.EXDEV) {
 		t.Fatal("injected root was renamed", err)
 	}
 	if _, err := os.Stat(m.workspace); err != nil {

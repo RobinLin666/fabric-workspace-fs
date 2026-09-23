@@ -284,6 +284,50 @@ func TestPortableAdapterNotebookSaveAndConflict(t *testing.T) {
 	})
 }
 
+func TestPortableAdapterNotebookSaveOnReleaseWithoutFlush(t *testing.T) {
+	adapter, service := portableFixture(t, false)
+	_, notebook, _, _, _ := portablePaths(t)
+	path := notebook + "/Sample notebook.ipynb"
+	info := &fuse.FileInfo_t{Flags: fuse.O_RDWR}
+	if status := adapter.OpenEx(path, info); status != 0 {
+		t.Fatal(status)
+	}
+	edited := []byte(`{"cells":[],"nbformat":4,"nbformat_minor":5,"metadata":{"released":true}}`)
+	if status := adapter.Truncate(path, int64(len(edited)), info.Fh); status != 0 {
+		t.Fatal(status)
+	}
+	if n := adapter.Write(path, edited, 0, info.Fh); n != len(edited) {
+		t.Fatal(n)
+	}
+	if status := adapter.Release(path, info.Fh); status != 0 {
+		t.Fatalf("release without flush: %d", status)
+	}
+	if service.Counts().NotebookUpdates != 1 {
+		t.Fatalf("Notebook updates = %+v", service.Counts())
+	}
+}
+
+func TestPortableAdapterDestroyFlushesPendingNotebook(t *testing.T) {
+	adapter, service := portableFixture(t, false)
+	_, notebook, _, _, _ := portablePaths(t)
+	path := notebook + "/Sample notebook.ipynb"
+	info := &fuse.FileInfo_t{Flags: fuse.O_RDWR}
+	if status := adapter.OpenEx(path, info); status != 0 {
+		t.Fatal(status)
+	}
+	edited := []byte(`{"cells":[],"nbformat":4,"nbformat_minor":5,"metadata":{"destroyed":true}}`)
+	if status := adapter.Truncate(path, int64(len(edited)), info.Fh); status != 0 {
+		t.Fatal(status)
+	}
+	if n := adapter.Write(path, edited, 0, info.Fh); n != len(edited) {
+		t.Fatal(n)
+	}
+	adapter.Destroy()
+	if service.Counts().NotebookUpdates != 1 {
+		t.Fatalf("Notebook updates = %+v", service.Counts())
+	}
+}
+
 func TestWinFspIntegration(t *testing.T) {
 	if runtime.GOOS != "windows" || os.Getenv("FABRICFS_WINFSP_TEST") != "1" {
 		t.Skip("set FABRICFS_WINFSP_TEST=1 on Windows with WinFsp installed")

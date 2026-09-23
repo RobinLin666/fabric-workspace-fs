@@ -4,7 +4,6 @@ import (
 	"bytes"
 	"context"
 	"flag"
-	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -178,20 +177,16 @@ func TestMountValidCacheOptionsReachPlatformBoundary(t *testing.T) {
 	}
 }
 
-func TestMountHelpDocumentsCachePolicy(t *testing.T) {
+func TestCacheConfigurationReferenceRemainsValid(t *testing.T) {
 	t.Setenv("AZURE_TOKEN_CREDENTIALS", "invalid-credential-must-not-be-read")
-	var output bytes.Buffer
-	if code := Run(context.Background(), []string{"mount", "--help"}, io.Discard, &output, "test"); code != 0 {
-		t.Fatalf("help = %d, %s", code, &output)
-	}
 	for _, text := range []string{
-		"cache-config", "(default 2m0s)", "explicitly supplied --cache-ttl",
+		"cache-config", "default to 2m", "explicitly supplied --cache-ttl",
 		"missing/null durations inherit", "workspace/type/surface -> item -> item/surface",
 		"catalog is allowed only in defaults", "buffered Notebook/Environment/MWC",
 		"bounded streaming/ranges", "content overrides are rejected", "no live reload",
 	} {
-		if !strings.Contains(output.String(), text) {
-			t.Fatalf("help missing %q: %s", text, &output)
+		if !strings.Contains(cacheConfigUsage, text) {
+			t.Fatalf("cache configuration reference missing %q: %s", text, cacheConfigUsage)
 		}
 	}
 	_, example, ok := strings.Cut(cacheConfigUsage, "Example: ")

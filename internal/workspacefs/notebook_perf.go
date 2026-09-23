@@ -24,12 +24,13 @@ type NotebookStageStats struct {
 
 type notebookPerf struct {
 	mu     sync.Mutex
-	stages [9]NotebookStageStats
+	stages [11]NotebookStageStats
 }
 
 var notebookStages = [...]string{
 	"definition_wait", "definition_export", "decode_validate", "digest",
 	"save_prepare", "save_preflight", "save_update", "spool_sync", "flush_lock",
+	"content_get", "content_put",
 }
 
 func (s *FS) observeNotebook(stage string, elapsed time.Duration, err error) {
